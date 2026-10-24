@@ -25,6 +25,7 @@ from wingline.case_writer import (
     run_block_mesh,
     run_foam,
 )
+from wingline.steer import steer_fresh, steer_texts
 from wingline.kernel import (
     Bounds,
     Commit,
@@ -411,6 +412,8 @@ def observe(run_id: str) -> dict:
         "solve_remaining": max(0, Bounds.solve_budget - solve_reds),
         "last": last,
         "log_tail": tail,
+        "steer": steer_texts(run_dir),
+        "steer_fresh": steer_fresh(run_dir),
     }
     _note(store_root(), "observe", run_id, "ok", str(last.get("id")) if last else "")
     return result

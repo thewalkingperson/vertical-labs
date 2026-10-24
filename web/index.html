@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wingline</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="mark" aria-hidden="true">Wl</span>
+      <div>
+        <h1>Wingline</h1>
+        <p>Coarse wing studies</p>
+      </div>
+    </div>
+    <p id="status" class="status">Idle</p>
+  </header>
+
+  <main class="workspace">
+    <section class="talk" aria-label="Conversation">
+      <div id="transcript" class="transcript"></div>
+      <form id="composer" class="composer">
+        <label for="message">Message</label>
+        <textarea id="message" rows="3" placeholder="Ask about a wing"></textarea>
+        <div class="composer-row">
+          <p id="hint">Send at any time. During a run this steers the agent.</p>
+          <div class="actions">
+            <button type="button" id="reset" class="quiet">Reset</button>
+            <button type="submit">Send</button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <section class="bench" aria-label="Runs and files">
+      <div class="runs">
+        <h2>OpenFOAM runs</h2>
+        <div id="run-list" class="run-list"></div>
+      </div>
+      <div class="inspect">
+        <div class="files">
+          <h2>Case files</h2>
+          <div id="file-list" class="file-list"></div>
+        </div>
+        <article class="viewer" aria-live="polite">
+          <header class="viewer-head">
+            <h2 id="viewer-title">Select a file</h2>
+            <p id="viewer-meta"></p>
+          </header>
+          <div id="chips" class="chips"></div>
+          <pre id="viewer-body">Specs, mesh checks, solver logs, and force coefficients open here.</pre>
+        </article>
+      </div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

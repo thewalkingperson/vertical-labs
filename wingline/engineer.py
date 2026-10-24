@@ -24,6 +24,7 @@ from wingline.kernel import (
     shape,
 )
 from wingline.mcp_server import canonical_spec, perform_pilot, spec_hash
+from wingline.prompts import INNER_SYSTEM
 from wingline.outer import evaluate
 from wingline.planner import drive
 
@@ -211,7 +212,7 @@ class Engineer:
                 else:
                     os.environ[key] = value
 
-    def ask(self, text: str, show=None) -> EngineerView:
+    def ask(self, text: str, show=None, on_run=None) -> EngineerView:
         if policy_differs():
             outcome: Screening | DesignGrade | Refusal = _bounds_refusal()
             _show(show, outcome)
@@ -233,6 +234,8 @@ class Engineer:
         run_id = "run-" + secrets.token_hex(8)
         run_dir = self.store / run_id
         run_dir.mkdir(parents=True)
+        if on_run is not None:
+            on_run(run_id)
         (run_dir / "spec.json").write_text(json.dumps(parsed, indent=2) + "\n")
         lease = _write_lease(run_dir / "lease")
         with self._env(run_id, lease):
@@ -354,7 +357,7 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
                 f"Run id: {run_id}",
                 f"Lease: {lease}",
                 "Spec: " + json.dumps(canonical_spec(spec)),
-                "Use the screen-wing skill. Pass the lease unchanged.",
+                "Finish this ledger. Use the screen-wing skill. Pass the lease unchanged.",
                 "",
             ]
         )
@@ -365,6 +368,8 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
     cmd = [
         grok,
         "--trust",
+        "--system-prompt-override",
+        INNER_SYSTEM,
         "--prompt-file",
         str(prompt),
         "--cwd",

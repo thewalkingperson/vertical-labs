@@ -69,7 +69,7 @@ The live wing on this Mac stopped at `thin_airfoil`. The screening numbers in `D
 
 ## How a run works
 
-1. **Meta reads the sentence.** A complete wing, such as `NACA 2412 at 6 degrees`, goes straight through. `a wing with low drag at 10 degrees` has no section, so meta asks which NACA code to start from. Enter starts at 2412. `NACA 2412` with no angle asks for the angle. Speed stays at 10 m/s when you leave it out, and meta says so. The questions and answers are appended to `runs/meta/dialogue.jsonl`.
+1. **Meta reads the sentence.** A complete wing, such as `NACA 2412 at 6 degrees`, goes straight through. If the section or the angle is missing, Grok interviews you in its own words, under the Wingline system prompt. A code it settles on still has to pass the wing bounds before a case starts. The questions and answers are appended to `runs/meta/dialogue.jsonl`.
 2. **Check the policy files.** `harness/shapes/receipt.shacl.ttl` and `harness/gate/Gate.lean` must match the numbers in `wingline/kernel.py`. A mismatch stops at `bounds`.
 3. **Health-check OpenFOAM.** A stock cylinder tutorial must report 2000 cells, with continuity and velocity error inside a fixed bound. A green result is reused on the next question.
 4. **Inner loop, one wing.** A Grok session is the driver. It may look at the run, commit the spec, commit a mesh, commit a solve, and commit the force coefficients, then observe again and repeat until the ledger is finished. It holds a lease for that run. A bad lease writes nothing. The skill is `.grok/skills/screen-wing/SKILL.md`. The session is started with `--trust`, so the project skill, the hooks, and the wingline MCP server load. Eight turns is the cap. If the agent stops with the ledger still open, the same tools finish that one case. `runs/<id>/inner.json` records which driver finished it.
@@ -86,7 +86,7 @@ The live wing on this Mac stopped at `thin_airfoil`. The screening numbers in `D
 
 **Outer.** Grades the direct case, then keeps testing. The neighborhood above is one step of a coordinate search over camber and thickness. It writes `outer/verdict.json` for the grade and `outer/search.json` for the probes. It does not edit a bound, a skill, or a hook. If pySHACL or Lean is missing, that gate refuses. The checker does not skip ahead.
 
-**Meta.** Talks to you before a run when the wing or the angle is missing, and records that dialogue. Between runs, `wingline.meta.propose` can still ship one structural fix: a stricter bound, a required receipt field, a denied tool, a Lean guard, a replay test, or a skill draft for a human to copy. A looser number is ignored. After a code change, the cylinder check still has to pass, or the change is reverted. This pass cannot declare the wing run successful.
+**Meta.** When the wing or the angle is missing, Grok reasons about the request and asks you. The system prompt is the coarse laminar study, the bounds, and the rule that a screening is not a hardware release. Between runs, `wingline.meta.propose` can still ship one structural fix: a stricter bound, a required receipt field, a denied tool, a Lean guard, a replay test, or a skill draft for a human to copy. A looser number is ignored. After a code change, the cylinder check still has to pass, or the change is reverted. This pass cannot declare the wing run successful.
 
 ## The setup this harness simulates
 
@@ -155,12 +155,10 @@ WINGLINE_AGENT=0 \
   .venv/bin/python -m wingline "NACA 2412 at 6 degrees. Is this worth a finer run?"
 ```
 
-A request with a goal and no section stops to ask. Press enter to start at 2412:
+A request with a goal and no section stops so Grok can ask. Answer in the same terminal:
 
 ```text
 .venv/bin/python -m wingline "a wing with low drag at 10 degrees"
-Which NACA 4-digit should I start from? ...
->
 ```
 
 From Python, a finer run and a hardware decision look like this:
@@ -176,6 +174,18 @@ decision = hardware_decision(graded.outcome)
 ```
 
 `refine` creates a new run only when the parent outcome is a screening that says the finer run is worth it. Otherwise the gate is `commission` and no case is written. `hardware_decision` returns a decision only for a `DesignGrade`.
+
+## Workbench
+
+A local page for the same store. The message box stays open. If a study is idle, Send starts it. If meta is waiting, Send answers the question. If a run is open, Send steers the agent: the text is written onto that run and the next tool turn sees it. `stop` ends the tool loop before the next OpenFOAM command. `grading 12` or `stream 80` during meshing, and `relax 0.5` or `non-ortho 1` during solving, are applied when they are in the allowed set.
+
+The run list is every `run-*` directory. Click a run, then a file, to read the spec, the mesh and solver logs, the force file, or a dictionary. The chips above the text are the parsed cells, mesh check, continuity, Cl, Cd, and dimensions.
+
+```bash
+.venv/bin/python -m wingline.web
+```
+
+Open http://127.0.0.1:8765. The page binds to this machine only. `WINGLINE_STORE` chooses the folder, and `WINGLINE_WEB_PORT` chooses the port. One workbench holds the store lock, so close a command-line `python -m wingline` session before starting it. Starting the page clears the chat and the `run-*` case files in that store. The cylinder health cache is kept. Reset, beside Send, clears the transcript without stopping a study that is already running. An open question stays on screen so you can still answer it.
 
 The tests do not start a new solve:
 

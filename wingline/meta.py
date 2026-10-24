@@ -18,6 +18,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from wingline.grok_call import run_grok
+from wingline.prompts import INTERVIEW_SCHEMA, META_SYSTEM
 from wingline.kernel import (
     Bounds,
     Panel,
@@ -589,48 +591,117 @@ def _ask(store: Path, reply: Callable[[str], str], prompt: str) -> str | Refusal
     return answer
 
 
-def _ask_naca(store: Path, reply: Callable[[str], str]) -> str | Refusal:
-    prompt = (
-        "Which NACA 4-digit should I start from? "
-        "Enter a code such as 2412, or press enter to start at 2412 "
-        "and search camber and thickness."
-    )
-    for _ in range(2):
-        answer = _ask(store, reply, prompt)
+def _blank(value: object) -> str | float | None:
+    if value is None:
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    return value  # type: ignore[return-value]
+
+
+def _accept(result: dict, known: dict) -> dict | str:
+    """A ready object becomes a spec, or a sentence the model can read."""
+    naca = _blank(result.get("naca")) or known.get("naca")
+    alpha = _blank(result.get("alpha_deg"))
+    if alpha is None:
+        alpha = known.get("alpha_deg")
+    speed = _blank(result.get("u_ms"))
+    if speed is None:
+        speed = known.get("u_ms")
+    objective = str(result.get("objective") or known.get("objective") or "")
+    if objective not in {"min_cd", "max_cl", "max_ld"}:
+        return "objective must be min_cd, max_cl, or max_ld"
+    try:
+        foil = parse_naca(str(naca).replace("NACA", "").replace("naca", "").strip())
+    except ValueError as exc:
+        return str(exc)
+    try:
+        alpha_f = float(alpha)  # type: ignore[arg-type]
+        speed_f = float(speed)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return "angle and speed are still missing"
+    if not (Bounds.alpha_min <= alpha_f <= Bounds.alpha_max):
+        return f"angle must be from {Bounds.alpha_min:g} to {Bounds.alpha_max:g}"
+    if not (Bounds.u_min <= speed_f <= Bounds.u_max):
+        return f"speed must be from {Bounds.u_min:g} to {Bounds.u_max:g}"
+    return {
+        "spec": _spec(foil.code(), alpha_f, speed_f),
+        "objective": objective,
+    }
+
+
+def _interview_prompt(raw: str, known: dict, history: list[dict], rejection: str) -> str:
+    lines = [
+        "Engineer request:",
+        raw,
+        "",
+        "Already known. Keep these unless the engineer changes them:",
+        json.dumps(known),
+        "",
+        "Dialogue:",
+    ]
+    if not history:
+        lines.append("(none)")
+    for turn in history:
+        lines.append(f"{turn['role']}: {turn['text']}")
+    if rejection:
+        lines.extend(["", "The gate rejected the last ready spec:", rejection])
+    lines.extend(["", "Reply with the interview object."])
+    return "\n".join(lines)
+
+
+def _grok_model(prompt: str) -> dict:
+    return run_grok(META_SYSTEM, prompt, schema=INTERVIEW_SCHEMA, max_turns=1, allow_tools=False)
+
+
+def _interview(
+    raw: str,
+    store: Path,
+    reply: Callable[[str], str],
+    known: dict,
+    model: Callable[[str], dict],
+) -> Study | Refusal:
+    history: list[dict] = []
+    rejection = ""
+    for _ in range(4):
+        try:
+            result = model(_interview_prompt(raw, known, history, rejection))
+        except (OSError, RuntimeError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            return _meta_refusal(str(exc) or "grok did not answer")
+        if not isinstance(result, dict):
+            return _meta_refusal("grok did not answer")
+        say = str(result.get("say") or "").strip()
+        if result.get("ready") is True:
+            accepted = _accept(result, known)
+            if isinstance(accepted, str):
+                rejection = accepted
+                history.append({"role": "gate", "text": accepted})
+                continue
+            note = say or "The direct case is settled."
+            return _study(
+                accepted["spec"],
+                accepted["objective"],
+                True,
+                (note,),
+            )
+        if not say:
+            return _meta_refusal("grok asked nothing")
+        answer = _ask(store, reply, say)
         if isinstance(answer, Refusal):
             return answer
-        if answer == "":
-            return "2412"
-        try:
-            return parse_naca(answer.replace("NACA", "").replace("naca", "").strip()).code()
-        except ValueError:
-            prompt = "That code is outside this setup. Enter a NACA 4-digit such as 2412, or press enter."
-    return _meta_refusal("need a NACA 4-digit to start from")
+        history.append({"role": "meta", "text": say})
+        history.append({"role": "engineer", "text": answer})
+        rejection = ""
+    return _meta_refusal("the interview did not settle a wing inside the bounds")
 
 
-def _ask_alpha(store: Path, reply: Callable[[str], str]) -> float | Refusal:
-    prompt = (
-        "What angle of attack should I use, in degrees? "
-        f"This setup allows {Bounds.alpha_min:g} to {Bounds.alpha_max:g}."
-    )
-    for _ in range(2):
-        answer = _ask(store, reply, prompt)
-        if isinstance(answer, Refusal):
-            return answer
-        try:
-            alpha = float(answer)
-        except ValueError:
-            alpha = None
-        if alpha is not None and Bounds.alpha_min <= alpha <= Bounds.alpha_max:
-            return alpha
-        prompt = (
-            f"Enter a number from {Bounds.alpha_min:g} to {Bounds.alpha_max:g}."
-        )
-    return _meta_refusal("need an angle of attack before a run can start")
-
-
-def resolve(text: str, store: Path, reply: Callable[[str], str]) -> Study | Refusal:
-    """Fill a direct spec. Ask only for a wing or an angle the request left out."""
+def resolve(
+    text: str,
+    store: Path,
+    reply: Callable[[str], str],
+    model: Callable[[str], dict] | None = None,
+) -> Study | Refusal:
+    """Fill a direct spec. A missing wing or angle is a Grok interview."""
     raw = " ".join(text.split())
     store = Path(store)
     if not raw:
@@ -681,32 +752,18 @@ def resolve(text: str, store: Path, reply: Callable[[str], str]) -> Study | Refu
     if not (Bounds.u_min <= speed <= Bounds.u_max):
         return _parse_refusal("speed outside bounds")
     code_match = _NACA_CODE.search(raw)
-    naca: str | None
-    if code_match is None:
-        asked = _ask_naca(store, reply)
-        if isinstance(asked, Refusal):
-            return asked
-        naca = asked
-    else:
+    known: dict = {
+        "naca": None,
+        "alpha_deg": stated_alpha,
+        "u_ms": speed,
+        "objective": _objective(raw),
+        "speed_was_stated": speed_given,
+    }
+    if code_match is not None:
         try:
-            naca = parse_naca(code_match.group("naca")).code()
+            known["naca"] = parse_naca(code_match.group("naca")).code()
         except ValueError as exc:
             return _parse_refusal(str(exc))
-    if stated_alpha is None:
-        asked_alpha = _ask_alpha(store, reply)
-        if isinstance(asked_alpha, Refusal):
-            return asked_alpha
-        alpha = float(asked_alpha)
-    else:
-        alpha = stated_alpha
-    notes: list[str] = []
-    if not speed_given:
-        notes.append(f"Speed was not in the question. Using { _tok(speed) } m/s.")
-    objective = _objective(raw)
-    if objective == "min_cd":
-        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for lower drag.")
-    elif objective == "max_cl":
-        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for higher lift.")
-    else:
-        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for higher lift over drag.")
-    return _study(_spec(naca, alpha, speed), objective, True, tuple(notes))
+    if known["naca"] and stated_alpha is not None:
+        return _study(_spec(str(known["naca"]), float(stated_alpha), speed), _objective(raw), True, ())
+    return _interview(raw, store, reply, known, model or _grok_model)

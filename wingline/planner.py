@@ -10,6 +10,7 @@ from wingline.mcp_server import (
     commit_spec,
     observe,
 )
+from wingline.steer import interpret_steer
 
 # One knob at a time, in this order. The server still admits or refuses.
 _MESH = ((60, 8), (60, 12), (60, 4), (80, 4))
@@ -35,16 +36,23 @@ def drive(run_id: str, lease: str) -> None:
         if seen.get("error") or seen.get("terminal"):
             return
         stage = seen.get("open_stage")
+        choice = interpret_steer(seen.get("steer_fresh") or [], str(stage or ""))
+        if choice["action"] == "stop":
+            return
         if stage == "scope":
             result = commit_spec(run_id, lease)
         elif stage == "mesh":
             reds = int(seen.get("mesh_reds") or 0)
             plan = _MESH[min(reds, len(_MESH) - 1)]
-            result = commit_mesh(run_id, lease, plan[0], plan[1])
+            stream = int(choice.get("stream") or plan[0])
+            grading = int(choice.get("grading") or plan[1])
+            result = commit_mesh(run_id, lease, stream, grading)
         elif stage == "solve":
             reds = int(seen.get("solve_reds") or 0)
             plan = _SOLVE[min(reds, len(_SOLVE) - 1)]
-            result = commit_solve(run_id, lease, plan[0], plan[1])
+            relax = float(choice.get("u_relax") if choice.get("u_relax") is not None else plan[0])
+            ortho = int(choice.get("non_ortho") if choice.get("non_ortho") is not None else plan[1])
+            result = commit_solve(run_id, lease, relax, ortho)
         elif stage == "forces":
             result = commit_forces(run_id, lease)
         else:

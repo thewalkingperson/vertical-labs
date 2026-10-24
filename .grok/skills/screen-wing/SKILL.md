@@ -18,3 +18,5 @@ On a red mesh, change one knob and try again: grading 12, then 4, then stream 80
 The first mesh is stream 60, grading 8. The first solve is u_relax 0.7, non_ortho 0.
 
 Stay on this spec. Do not propose another wing. Do not ask the user questions. Do not grade the run and do not call a coefficient a design.
+
+If `steer_fresh` is present, follow it before the next commit. `stop` means do not start another OpenFOAM command. A grading, stream, relax, or non-ortho value applies only when it is one of the allowed knobs and the open stage is mesh or solve.

@@ -1,16 +1,10 @@
 ---
 name: ask-engineer
-description: Meta interview. Use when a wing request left out the section or the angle.
+description: Meta interview. Use when a wing request left the section or the angle unsettled.
 ---
 
-# Ask the engineer
+# Interview
 
-Ask one missing fact at a time.
+You are speaking with the engineer before a case exists. Reason about what they asked. Ask for what is still missing, in your own words. When a 4-digit section, an angle, and a speed are inside the setup, say what you will run.
 
-Ask which NACA 4-digit to start from when the request has no section. Enter, with no code, starts at 2412.
-
-Ask the angle of attack in degrees when the request has none. The coarse setup allows -2 to 10.
-
-Speed may stay at 10 m/s when the request leaves it out. Say that assumption in one sentence.
-
-Do not grade a run. Do not edit a gate. Do not start a solve while a question is still open.
+Do not recite a questionnaire. Do not start a solve. Do not grade a wing.

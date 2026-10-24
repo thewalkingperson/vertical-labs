@@ -28,12 +28,39 @@ def test_classic_sentence_does_not_ask(tmp_path: Path) -> None:
     assert study.notes == ()
 
 
-def test_low_drag_asks_for_a_starting_wing(tmp_path: Path) -> None:
-    def reply(prompt: str) -> str:
-        assert "NACA" in prompt
-        return ""
+def _ask(say: str, **fields: object) -> dict:
+    payload = {
+        "say": say,
+        "ready": False,
+        "naca": "",
+        "alpha_deg": 0,
+        "u_ms": 0,
+        "objective": "max_ld",
+    }
+    payload.update(fields)
+    return payload
 
-    study = resolve("a wing with low drag at 10 degrees", tmp_path, reply)
+
+def test_low_drag_asks_in_the_models_words(tmp_path: Path) -> None:
+    question = "Low drag at 10 degrees still needs a section. Which 4-digit should I open with?"
+
+    def model(prompt: str) -> dict:
+        if "(none)" in prompt:
+            return _ask(question, alpha_deg=10, u_ms=10, objective="min_cd")
+        return _ask(
+            "I'll open NACA 2412 at 10 degrees and 10 m/s, then compare nearby sections on drag.",
+            ready=True,
+            naca="2412",
+            alpha_deg=10,
+            u_ms=10,
+            objective="min_cd",
+        )
+
+    def reply(prompt: str) -> str:
+        assert prompt == question
+        return "Use 2412."
+
+    study = resolve("a wing with low drag at 10 degrees", tmp_path, reply, model)
     assert isinstance(study, Study)
     assert study.spec == {
         "naca": "2412",
@@ -42,21 +69,54 @@ def test_low_drag_asks_for_a_starting_wing(tmp_path: Path) -> None:
         "density": "coarse",
     }
     assert study.objective == "min_cd"
-    assert study.alpha_fixed is True
-    assert any("10 m/s" in note for note in study.notes)
+    assert study.notes[0].startswith("I'll open NACA 2412")
     dialogue = (tmp_path / "meta" / "dialogue.jsonl").read_text()
-    assert "start at 2412" in dialogue
+    assert question in dialogue
+    assert "press enter" not in dialogue.lower()
 
 
 def test_bare_naca_asks_for_the_angle(tmp_path: Path) -> None:
+    def model(prompt: str) -> dict:
+        if "(none)" in prompt:
+            return _ask("What angle should this 2412 meet the air at?")
+        return _ask(
+            "2412 at 6 degrees and 10 m/s.",
+            ready=True,
+            naca="2412",
+            alpha_deg=6,
+            u_ms=10,
+            objective="max_ld",
+        )
+
     def reply(prompt: str) -> str:
         assert "angle" in prompt.lower()
         return "6"
 
-    study = resolve("NACA 2412", tmp_path, reply)
+    study = resolve("NACA 2412", tmp_path, reply, model)
     assert isinstance(study, Study)
     assert study.spec["naca"] == "2412"
     assert study.spec["alpha_deg"] == 6
+
+
+def test_a_rejected_spec_goes_back_to_the_model(tmp_path: Path) -> None:
+    seen: list[str] = []
+
+    def model(prompt: str) -> dict:
+        seen.append(prompt)
+        if "The gate rejected" in prompt:
+            return _ask(
+                "2412 at 6 degrees is inside the setup.",
+                ready=True,
+                naca="2412",
+                alpha_deg=6,
+                u_ms=10,
+            )
+        return _ask("Trying a section.", ready=True, naca="9999", alpha_deg=6, u_ms=10)
+
+    study = resolve("a wing at 6 degrees", tmp_path, _boom, model)
+    assert isinstance(study, Study)
+    assert study.spec["naca"] == "2412"
+    assert len(seen) == 2
 
 
 def test_stated_angle_outside_bounds_does_not_ask(tmp_path: Path) -> None:
@@ -86,3 +146,14 @@ def test_lower_drag_wins_the_step() -> None:
 def test_meta_source_has_no_grade_type() -> None:
     source = (ROOT / "wingline" / "meta.py").read_text()
     assert "DesignGrade" not in source
+    assert "Which NACA 4-digit should I start from?" not in source
+    assert "press enter to start at 2412" not in source
+
+
+def test_inner_session_overrides_the_system_prompt() -> None:
+    source = (ROOT / "wingline" / "engineer.py").read_text()
+    assert "--system-prompt-override" in source
+    assert "INNER_SYSTEM" in source
+    prompt = (ROOT / "wingline" / "prompts.py").read_text()
+    assert "You are the inner loop." in prompt
+    assert "You are the meta loop." in prompt
