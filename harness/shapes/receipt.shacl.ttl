@@ -1,0 +1,116 @@
+# BEGIN BOUNDS
+# nu 0.01
+# rho 1.0
+# aref 0.1
+# chord_m 1.0
+# alpha [-2.0, 10.0]
+# U [5.0, 25.0] default 10.0
+# thickness [6, 20]
+# n_normal 40
+# farfield x [-8.0, 12.0] y [-8.0, 8.0] z [0, 0.1]
+# end_time 200
+# mesh_budget 3
+# solve_budget 2
+# max_agent_turns 8
+# max_non_ortho 65.0
+# max_skew 4.0
+# continuity_cum 0.005
+# cylinder_cells 2000
+# cylinder_continuity 0.0005
+# cylinder_velocity 5e-05
+# delta_cl 0.05
+# delta_cd 0.01
+# thin_abs 0.25
+# thin_rel 0.35
+# timeouts mesh 90 solve 540 pilot 180
+# cell_counts 9600 12800 19200 25600
+# streams 60 80
+# gradings 2 4 8 12
+# screening_sentence This mesh is not a design answer until the refinement gate passes.
+# design_sentence Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release.
+# END BOUNDS
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix wl: <https://vertical-labs.local/wingline#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+
+wl:ReceiptShape a sh:NodeShape ;
+  sh:targetClass wl:PilotReceipt, wl:ScopeReceipt, wl:MeshReceipt,
+                 wl:SolveReceipt, wl:ForcesReceipt, wl:StopReceipt ;
+  sh:closed true ;
+  sh:ignoredProperties (rdf:type) ;
+  sh:property [ sh:path wl:writer ; sh:hasValue "case-writer" ; sh:minCount 1 ; sh:maxCount 1 ] ;
+  sh:property [ sh:path wl:status ; sh:in ("green" "red" "stopped") ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:log ; sh:minCount 1 ; sh:datatype xsd:string ] ;
+  sh:property [ sh:path wl:id ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:type ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:run_id ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:stage ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:parent_id ] ;
+  sh:property [ sh:path wl:spec_hash ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:written_at ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:cells ] ;
+  sh:property [ sh:path wl:continuity ] ;
+  sh:property [ sh:path wl:velocity_error ] ;
+  sh:property [ sh:path wl:naca ] ;
+  sh:property [ sh:path wl:alpha_deg ] ;
+  sh:property [ sh:path wl:u_ms ] ;
+  sh:property [ sh:path wl:density ] ;
+  sh:property [ sh:path wl:pilot_id ] ;
+  sh:property [ sh:path wl:stream ] ;
+  sh:property [ sh:path wl:grading ] ;
+  sh:property [ sh:path wl:cells_expected ] ;
+  sh:property [ sh:path wl:max_non_ortho ] ;
+  sh:property [ sh:path wl:max_skew ] ;
+  sh:property [ sh:path wl:signature ] ;
+  sh:property [ sh:path wl:u_relax ] ;
+  sh:property [ sh:path wl:non_ortho ] ;
+  sh:property [ sh:path wl:continuity_cum ] ;
+  sh:property [ sh:path wl:failure ] ;
+  sh:property [ sh:path wl:cl ] ;
+  sh:property [ sh:path wl:cd ] ;
+  sh:property [ sh:path wl:why ] ;
+  sh:property [ sh:path wl:idempotency_key ] .
+
+wl:MeshShape a sh:NodeShape ;
+  sh:targetClass wl:MeshReceipt ;
+  sh:property [ sh:path wl:stream ; sh:in (60 80) ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:grading ; sh:in (2 4 8 12) ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:cells ; sh:equals wl:cells_expected ; sh:minCount 1 ] .
+
+wl:ForcesShape a sh:NodeShape ;
+  sh:targetClass wl:ForcesReceipt ;
+  sh:property [ sh:path wl:cd ; sh:minExclusive 0 ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:cl ; sh:minCount 1 ] ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "green forces receipt shares a run with a red or stopped receipt" ;
+    sh:select """
+      PREFIX wl: <https://vertical-labs.local/wingline#>
+      SELECT $this ?other ?st
+      WHERE {
+        $this wl:status "green" .
+        $this wl:run_id ?run .
+        ?other wl:run_id ?run .
+        ?other wl:status ?st .
+        FILTER (?st IN ("red", "stopped"))
+        FILTER (?other != $this)
+      }
+    """ ;
+  ] .
+
+wl:DeltaShape a sh:NodeShape ;
+  sh:targetClass wl:DeltaRecord ;
+  sh:sparql [
+    a sh:SPARQLConstraint ;
+    sh:message "force delta outside bound" ;
+    sh:select """
+      PREFIX wl: <https://vertical-labs.local/wingline#>
+      SELECT $this ?dcl ?dcd
+      WHERE {
+        $this wl:delta_cl ?dcl .
+        $this wl:delta_cd ?dcd .
+        FILTER (ABS(?dcl) > 0.05 || ABS(?dcd) > 0.01)
+      }
+    """ ;
+  ] .

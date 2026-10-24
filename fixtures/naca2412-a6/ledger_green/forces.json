@@ -1,0 +1,14 @@
+{
+  "id": "rcpt-forces-2412-a6",
+  "type": "ForcesReceipt",
+  "run_id": "run-2412-a6",
+  "stage": "forces",
+  "status": "green",
+  "parent_id": "rcpt-solve-2412-a6",
+  "spec_hash": "sha256:naca2412-a6",
+  "log": "postProcessing/forceCoeffs/0/coefficient.dat",
+  "writer": "case-writer",
+  "written_at": "2026-10-23T00:00:00Z",
+  "cl": 0.86,
+  "cd": 0.02
+}

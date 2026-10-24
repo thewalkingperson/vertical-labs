@@ -1,0 +1,18 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "wingline__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python",
+            "args": [
+              "/Users/saarthakbhatia/Documents/vertical-labs/.grok/hooks/trim_receipt.py"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

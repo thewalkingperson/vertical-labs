@@ -1,0 +1,44 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Edit|Write|Grep|WebFetch|WebSearch|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python",
+            "args": [
+              "/Users/saarthakbhatia/Documents/vertical-labs/.grok/hooks/deny.py",
+              "wingline: no shell and no case edits"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "^(?:mcp__)?wingline__(?!(?:observe|commit_spec|commit_mesh|commit_solve|commit_forces)$).+",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python",
+            "args": [
+              "/Users/saarthakbhatia/Documents/vertical-labs/.grok/hooks/deny.py",
+              "wingline: tool is not one of the five"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python",
+            "args": [
+              "/Users/saarthakbhatia/Documents/vertical-labs/.grok/hooks/deny_list.py"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

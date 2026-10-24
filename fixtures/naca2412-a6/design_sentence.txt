@@ -1,0 +1,1 @@
+Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release.

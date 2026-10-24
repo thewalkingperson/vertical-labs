@@ -1,0 +1,19 @@
+{
+  "id": "rcpt-mesh-2412-a6",
+  "type": "MeshReceipt",
+  "run_id": "run-2412-a6",
+  "stage": "mesh",
+  "status": "green",
+  "parent_id": "rcpt-scope-2412-a6",
+  "spec_hash": "sha256:naca2412-a6",
+  "log": "log.checkMesh",
+  "writer": "case-writer",
+  "written_at": "2026-10-23T00:00:00Z",
+  "stream": 60,
+  "grading": 8,
+  "cells": 9600,
+  "cells_expected": 9600,
+  "max_non_ortho": 48.0,
+  "max_skew": 1.1,
+  "signature": "sha256:mesh-green"
+}

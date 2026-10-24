@@ -1,0 +1,1 @@
+NACA 2412 at 6 degrees. Is this worth a finer run?

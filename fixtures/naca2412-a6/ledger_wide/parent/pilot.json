@@ -1,0 +1,15 @@
+{
+  "id": "rcpt-pilot-2412-a6",
+  "type": "PilotReceipt",
+  "run_id": "run-2412-a6",
+  "stage": "pilot",
+  "status": "green",
+  "parent_id": null,
+  "spec_hash": "sha256:naca2412-a6",
+  "log": "log.potentialFoam",
+  "writer": "case-writer",
+  "written_at": "2026-10-23T00:00:00Z",
+  "cells": 2000,
+  "continuity": 0.000135471,
+  "velocity_error": 1.18729e-05
+}

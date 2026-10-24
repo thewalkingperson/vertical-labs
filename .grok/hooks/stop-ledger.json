@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python",
+            "args": [
+              "/Users/saarthakbhatia/Documents/vertical-labs/.grok/hooks/stop_ledger.py"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

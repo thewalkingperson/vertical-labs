@@ -1,0 +1,16 @@
+{
+  "id": "rcpt-solve-run-2412-a6-w",
+  "type": "SolveReceipt",
+  "run_id": "run-2412-a6-w",
+  "stage": "solve",
+  "status": "green",
+  "parent_id": "rcpt-mesh-run-2412-a6-w",
+  "spec_hash": "sha256:naca2412-a6",
+  "log": "log.simpleFoam",
+  "writer": "case-writer",
+  "written_at": "2026-10-23T00:00:00Z",
+  "u_relax": 0.7,
+  "non_ortho": 0,
+  "continuity_cum": 0.0001,
+  "failure": "none"
+}

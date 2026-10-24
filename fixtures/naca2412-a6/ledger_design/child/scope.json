@@ -1,0 +1,17 @@
+{
+  "id": "rcpt-scope-run-2412-a6-r",
+  "type": "ScopeReceipt",
+  "run_id": "run-2412-a6-r",
+  "stage": "scope",
+  "status": "green",
+  "parent_id": "rcpt-pilot-run-2412-a6-r",
+  "spec_hash": "sha256:naca2412-a6",
+  "log": "spec.json",
+  "writer": "case-writer",
+  "written_at": "2026-10-23T00:00:00Z",
+  "naca": "2412",
+  "alpha_deg": 6,
+  "u_ms": 10,
+  "density": "refined",
+  "pilot_id": "rcpt-pilot-run-2412-a6-r"
+}
