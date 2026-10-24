@@ -1,16 +1,20 @@
 ---
 name: screen-wing
-description: Inner parent for one coarse wing. Use when the prompt has a run id, a lease, and a parsed spec.
+description: Inner loop for one wing. Use when the prompt has a run id, a lease, and a parsed spec.
 ---
 
 # Screen wing
 
-Call `observe` with the run id. If it says the ledger is terminal, stop.
+You are the inner loop for this one wing. Iterate until the ledger is terminal.
 
-Otherwise call the one commit for the open stage. Pass the lease unchanged.
+Each turn:
 
-First mesh is stream 60, grading 8. On a red mesh, change one knob: grading 12, then 4, then stream 80. Stop on stopped or wall_clock.
+1. Call `observe` with the run id.
+2. If it says the ledger is terminal, stop.
+3. Call the one commit for the open stage. Pass the lease unchanged.
 
-First solve is u_relax 0.7, non_ortho 0. On a residual red, try 0.5, then 0.3, then non_ortho 1. Stop on stopped or wall_clock.
+On a red mesh, change one knob and try again: grading 12, then 4, then stream 80. On a residual red, try u_relax 0.5, then 0.3, then non_ortho 1. Stop on stopped or wall_clock.
 
-Do not paraphrase Cl into a hardware opinion. Do not restate gate policy.
+The first mesh is stream 60, grading 8. The first solve is u_relax 0.7, non_ortho 0.
+
+Stay on this spec. Do not propose another wing. Do not ask the user questions. Do not grade the run and do not call a coefficient a design.

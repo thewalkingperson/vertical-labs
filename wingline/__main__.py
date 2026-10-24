@@ -8,6 +8,8 @@ from pathlib import Path
 
 from wingline.engineer import Engineer
 from wingline.kernel import Refusal
+from wingline.meta import NeedsAnswer, Study, resolve
+from wingline.outer import explore
 
 
 def panel_lines(outcome: object) -> list[str]:
@@ -37,13 +39,39 @@ def panel_lines(outcome: object) -> list[str]:
     return lines
 
 
+def _reply(prompt: str) -> str:
+    print(prompt, flush=True)
+    if not sys.stdin.isatty():
+        raise NeedsAnswer(prompt)
+    return input("> ")
+
+
+def _print_outcome(outcome: object) -> None:
+    for line in panel_lines(outcome):
+        print(line)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     text = " ".join(args).strip()
     store = Path(os.environ.get("WINGLINE_STORE", "runs"))
     engineer = Engineer.open(store)
-    view = engineer.ask(text)
-    for line in panel_lines(view.outcome):
+    if os.environ.get("WINGLINE_FIXTURE") == "1":
+        view = engineer.ask(text)
+        _print_outcome(view.outcome)
+        return 0
+    study = resolve(text, store, _reply)
+    if not isinstance(study, Study):
+        _print_outcome(study)
+        return 0
+    for note in study.notes:
+        print(f"meta: {note}")
+    view = engineer.ask(study.sentence)
+    _print_outcome(view.outcome)
+    if os.environ.get("WINGLINE_EXPLORE", "1") == "0" or not view.run_id:
+        return 0
+    print("outer: direct result is above. Searching nearby camber and thickness.")
+    for line in explore(store, study, view, engineer.ask):
         print(line)
     return 0
 

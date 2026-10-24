@@ -2,7 +2,11 @@
 
 Wingline is an agent harness for one engineering question: is this wing shape worth a finer airflow simulation?
 
-You ask in a sentence. The program builds a mesh, runs a coarse 2D OpenFOAM case, and reads lift and drag from the solver log. Each step has to pass before the next one starts. The lines you see are a projection of those pass/fail receipts. Anything the driver prints on its own is saved, and it is not the evidence.
+You ask in a sentence. Three loops handle it.
+
+The meta loop asks you for a wing or an angle you left out, and it tells you when it assumes 10 m/s. The inner loop is the agent: it iterates the mesh and solver tools until that one case is finished. The outer loop grades the case, prints that direct result, then runs a small search of nearby camber and thickness to see whether another coarse design measures better.
+
+Each step of a case has to pass before the next one starts. The lines you see are a projection of those pass/fail receipts. Anything the agent prints on its own is saved, and it is not the evidence.
 
 The full contract is `DESIGN.md`. This page is how the project works and how to run it.
 
@@ -65,26 +69,24 @@ The live wing on this Mac stopped at `thin_airfoil`. The screening numbers in `D
 
 ## How a run works
 
-1. **Parse the sentence.** The result is a small spec: wing code, angle, speed, coarse or refined.
+1. **Meta reads the sentence.** A complete wing, such as `NACA 2412 at 6 degrees`, goes straight through. `a wing with low drag at 10 degrees` has no section, so meta asks which NACA code to start from. Enter starts at 2412. `NACA 2412` with no angle asks for the angle. Speed stays at 10 m/s when you leave it out, and meta says so. The questions and answers are appended to `runs/meta/dialogue.jsonl`.
 2. **Check the policy files.** `harness/shapes/receipt.shacl.ttl` and `harness/gate/Gate.lean` must match the numbers in `wingline/kernel.py`. A mismatch stops at `bounds`.
 3. **Health-check OpenFOAM.** A stock cylinder tutorial must report 2000 cells, with continuity and velocity error inside a fixed bound. A green result is reused on the next question.
-4. **Hand the driver five tools.** It may look at the run, commit the spec, commit a mesh, commit a solve, and commit the force coefficients. It holds a lease for that run. A bad lease writes nothing.
+4. **Inner loop, one wing.** A Grok session is the driver. It may look at the run, commit the spec, commit a mesh, commit a solve, and commit the force coefficients, then observe again and repeat until the ledger is finished. It holds a lease for that run. A bad lease writes nothing. The skill is `.grok/skills/screen-wing/SKILL.md`. The session is started with `--trust`, so the project skill, the hooks, and the wingline MCP server load. Eight turns is the cap. If the agent stops with the ledger still open, the same tools finish that one case. `runs/<id>/inner.json` records which driver finished it.
 5. **Run OpenFOAM in one place.** Only `wingline/case_writer.py` starts `openfoam`. The commands are fixed: `blockMesh` and `checkMesh`, then `simpleFoam`, then `postProcess -func forceCoeffs`. One case is written at a time.
-6. **Admit a receipt, or refuse it.** The legal order is cylinder, spec, mesh, solve, forces. The checker sets green or red from the log. The driver does not get to choose the status. A green force receipt after an earlier failure is rejected.
-7. **Grade from the outside.** After the driver stops, `wingline/outer.py` reads the ledger and the case files. It runs pySHACL, runs Lean, re-reads every log with the same judges, then compares lift with the thin-airfoil estimate. The first failure wins. It does not read the driver's transcript.
-8. **Project the answer.** `kernel.project` is the only function that builds a screening or a design grade. The command prints those panels.
+6. **Admit a receipt, or refuse it.** The legal order is cylinder, spec, mesh, solve, forces. The checker sets green or red from the log. The agent does not get to choose the status. A green force receipt after an earlier failure is rejected.
+7. **Outer grades the direct case.** `wingline/outer.py` reads the ledger and the case files. It runs pySHACL, runs Lean, re-reads every log with the same judges, then compares lift with the thin-airfoil estimate. The first failure wins. It does not read the agent transcript. `kernel.project` is the only function that builds a screening or a design grade. The command prints those panels before any search starts.
+8. **Outer searches nearby designs.** After the direct panels, it runs up to four more coarse cases: thickness 2 counts thinner, thickness 2 counts thicker, camber one digit up, camber one digit down. The angle you named stays fixed. The cases run one at a time through the same gates. The tool client runs these neighbors. The search ranks them on your aim: lower drag, higher lift, or, when you did not name an aim, higher lift over drag. A neighbor that measures better is reported with its gate. That report is not a hardware decision. `WINGLINE_EXPLORE=0` skips the search.
 
-The default driver is `wingline/planner.py`. It is a client of the same tools. The first mesh is stream 60 and grading 8. A red mesh changes one knob at a time. The first solve uses under-relaxation 0.7. A red residual may try a smaller value. Eight turns is the cap.
-
-`WINGLINE_AGENT=1` puts one Grok session in that seat. It sees the same five tools and the same receipt rules. The run recorded above used the planner.
+`WINGLINE_AGENT=0` keeps the agent out of the direct case too, and the tool client runs it. The command you type uses the agent.
 
 ## Three loops
 
-**Inner.** The planner, or the Grok session, turns the mesh and solver knobs until the ledger is finished or it runs out of turns. It cannot mark its own work correct.
+**Inner.** The agent, its skill, the hooks, and the five MCP tools. It iterates until this one wing's ledger is terminal. It cannot mark its own work correct, and it does not wander off into other wings.
 
-**Outer.** The checker writes `outer/verdict.json` and nothing else. It does not edit a case, a bound, a skill, or a hook. If pySHACL or Lean is missing, that gate refuses. The checker does not skip ahead.
+**Outer.** Grades the direct case, then keeps testing. The neighborhood above is one step of a coordinate search over camber and thickness. It writes `outer/verdict.json` for the grade and `outer/search.json` for the probes. It does not edit a bound, a skill, or a hook. If pySHACL or Lean is missing, that gate refuses. The checker does not skip ahead.
 
-**Meta.** Between runs, `wingline.meta.propose` can ship one structural fix: a stricter bound, a required receipt field, a denied tool, a Lean guard, a replay test, or a skill draft for a human to copy. A looser number is ignored. After a code change, the cylinder check still has to pass, or the change is reverted. This pass cannot declare the wing run successful.
+**Meta.** Talks to you before a run when the wing or the angle is missing, and records that dialogue. Between runs, `wingline.meta.propose` can still ship one structural fix: a stricter bound, a required receipt field, a denied tool, a Lean guard, a replay test, or a skill draft for a human to copy. A looser number is ignored. After a code change, the cylinder check still has to pass, or the change is reverted. This pass cannot declare the wing run successful.
 
 ## The setup this harness simulates
 
@@ -139,11 +141,26 @@ WINGLINE_FIXTURE=1 \
   .venv/bin/python -m wingline "NACA 2412 at 6 degrees. Is this worth a finer run?"
 ```
 
-Put a Grok session in the driver's seat. `grok` must be on your `PATH`. It gets the same tools and the same gates:
+The command above uses the agent for the wing you named, prints that result, then searches four nearby sections. Skip the search:
 
 ```bash
-WINGLINE_AGENT=1 \
+WINGLINE_EXPLORE=0 \
   .venv/bin/python -m wingline "NACA 2412 at 6 degrees. Is this worth a finer run?"
+```
+
+Run the direct case with the tool client instead of the agent:
+
+```bash
+WINGLINE_AGENT=0 \
+  .venv/bin/python -m wingline "NACA 2412 at 6 degrees. Is this worth a finer run?"
+```
+
+A request with a goal and no section stops to ask. Press enter to start at 2412:
+
+```text
+.venv/bin/python -m wingline "a wing with low drag at 10 degrees"
+Which NACA 4-digit should I start from? ...
+>
 ```
 
 From Python, a finer run and a hardware decision look like this:
@@ -172,7 +189,7 @@ The tests do not start a new solve:
 |---|---|
 | `wingline/__main__.py` | the command, and the panel lines |
 | `wingline/engineer.py` | parse, the store lock, and which driver runs |
-| `wingline/planner.py` | the default driver |
+| `wingline/planner.py` | the tool client that finishes a case, and that runs the outer search |
 | `wingline/mcp_server.py` | the five tools, plus the cylinder health check |
 | `wingline/case_writer.py` | the only process that starts OpenFOAM |
 | `wingline/kernel.py` | bounds, the legal receipt order, judges, and the projection |

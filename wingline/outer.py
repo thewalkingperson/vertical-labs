@@ -19,6 +19,7 @@ from wingline.kernel import (
     judge_solve,
     judge_thin,
     load_ledger,
+    parse_naca,
     render_lean,
     render_shacl,
     _scope_ok,
@@ -326,3 +327,227 @@ def evaluate(
 
 # Bounds is referenced so a policy edit cannot drift unnoticed in this module's import.
 _ = Bounds.screening_sentence
+
+# One finite-difference step. Four coarse neighbors, serial, after the direct case.
+EXPLORE_BUDGET = 4
+_OBJECTIVES = {
+    "min_cd": "lower drag",
+    "max_cl": "higher lift",
+    "max_ld": "higher lift over drag",
+}
+
+
+def _shift_naca(code: str, dm: int, dt: int) -> str | None:
+    foil = parse_naca(code)
+    camber = foil.m + dm
+    thickness = foil.t + dt
+    position = foil.p
+    if not 0 <= camber <= 9:
+        return None
+    if camber == 0:
+        position = 0
+    elif position == 0:
+        position = 4
+    try:
+        return parse_naca(f"{camber}{position}{thickness:02d}").code()
+    except ValueError:
+        return None
+
+
+def probes(spec: dict, *, alpha_fixed: bool, budget: int = EXPLORE_BUDGET) -> list[dict]:
+    """Nearby specs. Angle stays put when the engineer named it."""
+    found: list[dict] = []
+    seen = {(str(spec["naca"]), float(spec["alpha_deg"]))}
+    for dm, dt in ((0, -2), (0, 2), (1, 0), (-1, 0)):
+        code = _shift_naca(str(spec["naca"]), dm, dt)
+        if code is None:
+            continue
+        key = (code, float(spec["alpha_deg"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        row = dict(spec)
+        row["naca"] = code
+        found.append(row)
+        if len(found) >= budget:
+            return found
+    if alpha_fixed:
+        return found
+    for step in (-2.0, 2.0):
+        alpha = float(spec["alpha_deg"]) + step
+        if not (Bounds.alpha_min <= alpha <= Bounds.alpha_max):
+            continue
+        key = (str(spec["naca"]), alpha)
+        if key in seen:
+            continue
+        seen.add(key)
+        row = dict(spec)
+        row["alpha_deg"] = int(alpha) if alpha.is_integer() else alpha
+        found.append(row)
+        if len(found) >= budget:
+            break
+    return found
+
+
+def _score(cl: object, cd: object, objective: str) -> float | None:
+    try:
+        lift = float(cl)  # type: ignore[arg-type]
+        drag = float(cd)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if drag <= 0:
+        return None
+    if objective == "min_cd":
+        return -drag
+    if objective == "max_cl":
+        return lift
+    return lift / drag
+
+
+def better(direct: dict, rows: list[dict], objective: str) -> dict | None:
+    """The neighbor with the best strict improvement, or None."""
+    base = _score(direct.get("cl"), direct.get("cd"), objective)
+    if base is None:
+        return None
+    winner = None
+    winner_score = base
+    for row in rows:
+        value = _score(row.get("cl"), row.get("cd"), objective)
+        if value is None:
+            continue
+        if value > winner_score + 1e-9:
+            winner = row
+            winner_score = value
+    return winner
+
+
+def _gate_name(outcome: object) -> str:
+    if isinstance(outcome, Refusal):
+        return outcome.gate
+    name = type(outcome).__name__
+    if name == "Screening":
+        return "screening"
+    if name == "DesignGrade":
+        return "design"
+    return "incomplete"
+
+
+def measure(store: Path, view: object) -> dict:
+    """Coefficients come from a green forces receipt. The gate comes from the projection."""
+    outcome = getattr(view, "outcome", view)
+    run_id = str(getattr(view, "run_id", "") or getattr(outcome, "run_id", "") or "")
+    cl = None
+    cd = None
+    spec: dict = {}
+    if run_id:
+        folder = Path(store) / run_id
+        spec_path = folder / "spec.json"
+        if spec_path.is_file():
+            try:
+                spec = json.loads(spec_path.read_text())
+            except json.JSONDecodeError:
+                spec = {}
+        ledger = folder / "ledger"
+        if ledger.is_dir():
+            for item in reversed(load_ledger(ledger)):
+                if item.get("stage") == "forces" and item.get("status") == "green":
+                    try:
+                        cl = float(item["cl"])
+                        cd = float(item["cd"])
+                    except (KeyError, TypeError, ValueError):
+                        cl = None
+                        cd = None
+                    break
+    return {
+        "run_id": run_id,
+        "gate": _gate_name(outcome),
+        "cl": cl,
+        "cd": cd,
+        "naca": spec.get("naca", ""),
+        "alpha_deg": spec.get("alpha_deg", ""),
+        "u_ms": spec.get("u_ms", ""),
+    }
+
+
+def _label(row: dict) -> str:
+    return f"NACA {row.get('naca')} at {row.get('alpha_deg')} degrees"
+
+
+def _fmt(kind: str, row: dict) -> str:
+    label = _label(row)
+    if row.get("cl") is None or row.get("cd") is None:
+        return f"{kind}: {label}. Gate {row.get('gate')}. No coefficients."
+    return (
+        f"{kind}: {label}. Gate {row.get('gate')}. "
+        f"Cl {float(row['cl']):.3f}. Cd {float(row['cd']):.3f}."
+    )
+
+
+def board_lines(objective: str, rows: list[dict], best: dict | None) -> list[str]:
+    aim = _OBJECTIVES.get(objective, objective)
+    lines = [f"outer: compared nearby wings on {aim}."]
+    for index, row in enumerate(rows):
+        lines.append(_fmt("direct" if index == 0 else "probed", row))
+    if best is None:
+        lines.append("outer: no nearby wing beat the direct case on this pass.")
+        return lines
+    lines.append(
+        f"outer: {_label(best)} is the better neighbor on this coarse pass. "
+        "The numbers are the log measurements. This is not a hardware decision."
+    )
+    return lines
+
+
+def _write_search(store: Path, run_id: str, objective: str, rows: list[dict], best: dict | None) -> None:
+    folder = Path(store) / run_id / "outer" if run_id else Path(store)
+    folder.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "objective": objective,
+        "rows": rows,
+        "best_naca": None if best is None else best.get("naca"),
+        "best_alpha_deg": None if best is None else best.get("alpha_deg"),
+    }
+    (folder / "search.json").write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def explore(store: Path, study: object, origin: object, run_case) -> list[str]:
+    """Grade is already done. This is the search: a few nearby wings, one at a time."""
+    direct = measure(store, origin)
+    spec = getattr(study, "spec", {})
+    if not direct["naca"]:
+        direct["naca"] = spec.get("naca", "")
+        direct["alpha_deg"] = spec.get("alpha_deg", "")
+        direct["u_ms"] = spec.get("u_ms", "")
+    rows = [direct]
+    last = Path(store) / "last_spec.json"
+    backup = last.read_text() if last.is_file() else None
+    previous = os.environ.get("WINGLINE_AGENT")
+    os.environ["WINGLINE_AGENT"] = "0"
+    try:
+        alpha_fixed = bool(getattr(study, "alpha_fixed", True))
+        for neighbor in probes(spec, alpha_fixed=alpha_fixed):
+            sentence = (
+                f"NACA {neighbor['naca']} at {neighbor['alpha_deg']} degrees"
+                f" and {neighbor['u_ms']} m/s."
+            )
+            view = run_case(sentence)
+            row = measure(store, view)
+            if not row["naca"]:
+                row["naca"] = neighbor["naca"]
+                row["alpha_deg"] = neighbor["alpha_deg"]
+                row["u_ms"] = neighbor["u_ms"]
+            rows.append(row)
+    finally:
+        if previous is None:
+            os.environ.pop("WINGLINE_AGENT", None)
+        else:
+            os.environ["WINGLINE_AGENT"] = previous
+        if backup is None:
+            if last.exists():
+                last.unlink()
+        else:
+            last.write_text(backup)
+    objective = str(getattr(study, "objective", "max_ld"))
+    chosen = better(direct, rows[1:], objective)
+    _write_search(store, str(direct.get("run_id") or ""), objective, rows, chosen)
+    return board_lines(objective, rows, chosen)

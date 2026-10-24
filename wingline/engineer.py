@@ -1,4 +1,4 @@
-"""Ask, refine, and the store lock. The driver is the planner unless WINGLINE_AGENT=1."""
+"""Ask, refine, and the store lock. The inner loop is the agent unless WINGLINE_AGENT=0."""
 
 from __future__ import annotations
 
@@ -18,8 +18,10 @@ from wingline.kernel import (
     Panel,
     Refusal,
     Screening,
+    load_ledger,
     parse_naca,
     project,
+    shape,
 )
 from wingline.mcp_server import canonical_spec, perform_pilot, spec_hash
 from wingline.outer import evaluate
@@ -302,9 +304,18 @@ class Engineer:
         return EngineerView(str(getattr(outcome, "run_id", child_id)), outcome)
 
     def _drive(self, run_dir: Path, run_id: str, lease: str, spec: dict) -> None:
-        if os.environ.get("WINGLINE_AGENT") == "1":
+        """Inner loop. The agent iterates the five tools. The tool client finishes a case the agent left open."""
+        use_agent = os.environ.get("WINGLINE_AGENT", "1") != "0"
+        if use_agent and shutil.which("grok"):
             _drive_agent(run_dir, run_id, lease, spec, self.store)
+            if _ledger_terminal(run_dir):
+                _mark_inner(run_dir, "agent", "")
+                return
+            _mark_inner(run_dir, "agent+tools", "agent left the ledger open")
+            drive(run_id, lease)
             return
+        why = "WINGLINE_AGENT=0" if not use_agent else "grok is not on PATH"
+        _mark_inner(run_dir, "tools", why)
         drive(run_id, lease)
 
     def _finish(self, run_dir: Path, pilot: dict | None) -> Screening | DesignGrade | Refusal:
@@ -353,6 +364,7 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
         return
     cmd = [
         grok,
+        "--trust",
         "--prompt-file",
         str(prompt),
         "--cwd",
@@ -396,6 +408,29 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
         subprocess.run(cmd, cwd=_REPO, env=env, timeout=3600, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return
+
+
+_TERMINAL_SHAPES = {
+    "pilot_red",
+    "mesh_closed",
+    "solve_closed",
+    "forces_green",
+    "forces_red",
+}
+
+
+def _ledger_terminal(run_dir: Path) -> bool:
+    folder = run_dir / "ledger"
+    if not folder.is_dir():
+        return False
+    return shape(load_ledger(folder)) in _TERMINAL_SHAPES
+
+
+def _mark_inner(run_dir: Path, driver: str, why: str) -> None:
+    payload = {"driver": driver}
+    if why:
+        payload["why"] = why
+    (run_dir / "inner.json").write_text(json.dumps(payload, indent=2) + "\n")
 
 
 # spec_hash is part of the receipt identity the driver does not invent.

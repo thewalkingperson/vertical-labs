@@ -1,4 +1,8 @@
-"""One correction, one template. The return value is not a grade."""
+"""One correction, one template, and the interview when a request is incomplete.
+
+The return value of propose is not a grade. resolve asks for a wing or an angle
+the engineer left out, then hands back a spec. It does not run OpenFOAM.
+"""
 
 from __future__ import annotations
 
@@ -16,11 +20,14 @@ from typing import Callable
 
 from wingline.kernel import (
     Bounds,
+    Panel,
+    Refusal,
     emit,
     judge_forces,
     judge_mesh,
     judge_pilot,
     judge_solve,
+    parse_naca,
     project,
 )
 
@@ -461,3 +468,245 @@ def propose(store: Path) -> Shipped | NeedsHuman | Noop:
     finally:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         handle.close()
+
+
+class NeedsAnswer(Exception):
+    """The interview needs a person, and stdin is not a terminal."""
+
+    def __init__(self, prompt: str) -> None:
+        self.prompt = prompt
+        super().__init__(prompt)
+
+
+@dataclass(frozen=True, slots=True)
+class Study:
+    """One direct case, plus how the outer search may move."""
+
+    spec: dict
+    objective: str
+    alpha_fixed: bool
+    sentence: str
+    notes: tuple[str, ...]
+
+
+_CLASSIC = re.compile(
+    r"^NACA\s+(?P<naca>\d{4})\s+at\s+(?P<alpha>-?\d+(?:\.\d+)?)\s+degrees?"
+    r"(?:\s+and\s+(?P<speed>\d+(?:\.\d+)?)\s+m/s)?"
+    r"\.?"
+    r"(?:\s+Is this worth a finer run\?)?"
+    r"$",
+    re.IGNORECASE,
+)
+_SAME = re.compile(
+    r"^Same wing at\s+(?P<alpha>-?\d+(?:\.\d+)?)\s+degrees?\.?$",
+    re.IGNORECASE,
+)
+_NACA_CODE = re.compile(r"NACA\s+(?P<naca>\d{4})", re.IGNORECASE)
+_ANGLE = re.compile(r"at\s+(?P<alpha>-?\d+(?:\.\d+)?)\s+degrees?", re.IGNORECASE)
+_SPEED = re.compile(r"(?P<speed>\d+(?:\.\d+)?)\s+m/s", re.IGNORECASE)
+_LOW = re.compile(r"low\s+drag", re.IGNORECASE)
+_HIGH = re.compile(r"(?:high|more)\s+lift", re.IGNORECASE)
+
+
+def _tok(value: float) -> str:
+    number = float(value)
+    if number.is_integer():
+        return str(int(number))
+    return str(number)
+
+
+def _spec(naca: str, alpha: float, speed: float) -> dict:
+    return {
+        "naca": naca,
+        "alpha_deg": int(alpha) if float(alpha).is_integer() else float(alpha),
+        "u_ms": int(speed) if float(speed).is_integer() else float(speed),
+        "density": "coarse",
+    }
+
+
+def _sentence(spec: dict) -> str:
+    return (
+        f"NACA {spec['naca']} at {_tok(float(spec['alpha_deg']))} degrees"
+        f" and {_tok(float(spec['u_ms']))} m/s."
+    )
+
+
+def _study(spec: dict, objective: str, alpha_fixed: bool, notes: tuple[str, ...]) -> Study:
+    return Study(spec, objective, alpha_fixed, _sentence(spec), notes)
+
+
+def _meta_refusal(reason: str) -> Refusal:
+    return Refusal(
+        gate="meta",
+        log="meta/dialogue.jsonl",
+        reason=reason,
+        panels=(Panel("goal", reason), Panel("refused", "meta")),
+    )
+
+
+def _parse_refusal(reason: str) -> Refusal:
+    return Refusal(
+        gate="parse",
+        log="",
+        reason=reason,
+        panels=(Panel("goal", reason), Panel("refused", "parse")),
+    )
+
+
+def _log(store: Path, role: str, text: str) -> None:
+    folder = Path(store) / "meta"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / "dialogue.jsonl"
+    row = {"at": _now(), "role": role, "text": text}
+    with path.open("a") as handle:
+        handle.write(json.dumps(row) + "\n")
+
+
+def _objective(text: str) -> str:
+    if _LOW.search(text):
+        return "min_cd"
+    if _HIGH.search(text):
+        return "max_cl"
+    return "max_ld"
+
+
+def _speed_of(text: str) -> tuple[float, bool]:
+    match = _SPEED.search(text)
+    if match is None:
+        return float(Bounds.u_default), False
+    return float(match.group("speed")), True
+
+
+def _ask(store: Path, reply: Callable[[str], str], prompt: str) -> str | Refusal:
+    _log(store, "meta", prompt)
+    try:
+        answer = reply(prompt).strip()
+    except NeedsAnswer as exc:
+        return _meta_refusal(str(exc))
+    except EOFError:
+        return _meta_refusal(prompt)
+    _log(store, "engineer", answer)
+    return answer
+
+
+def _ask_naca(store: Path, reply: Callable[[str], str]) -> str | Refusal:
+    prompt = (
+        "Which NACA 4-digit should I start from? "
+        "Enter a code such as 2412, or press enter to start at 2412 "
+        "and search camber and thickness."
+    )
+    for _ in range(2):
+        answer = _ask(store, reply, prompt)
+        if isinstance(answer, Refusal):
+            return answer
+        if answer == "":
+            return "2412"
+        try:
+            return parse_naca(answer.replace("NACA", "").replace("naca", "").strip()).code()
+        except ValueError:
+            prompt = "That code is outside this setup. Enter a NACA 4-digit such as 2412, or press enter."
+    return _meta_refusal("need a NACA 4-digit to start from")
+
+
+def _ask_alpha(store: Path, reply: Callable[[str], str]) -> float | Refusal:
+    prompt = (
+        "What angle of attack should I use, in degrees? "
+        f"This setup allows {Bounds.alpha_min:g} to {Bounds.alpha_max:g}."
+    )
+    for _ in range(2):
+        answer = _ask(store, reply, prompt)
+        if isinstance(answer, Refusal):
+            return answer
+        try:
+            alpha = float(answer)
+        except ValueError:
+            alpha = None
+        if alpha is not None and Bounds.alpha_min <= alpha <= Bounds.alpha_max:
+            return alpha
+        prompt = (
+            f"Enter a number from {Bounds.alpha_min:g} to {Bounds.alpha_max:g}."
+        )
+    return _meta_refusal("need an angle of attack before a run can start")
+
+
+def resolve(text: str, store: Path, reply: Callable[[str], str]) -> Study | Refusal:
+    """Fill a direct spec. Ask only for a wing or an angle the request left out."""
+    raw = " ".join(text.split())
+    store = Path(store)
+    if not raw:
+        return _parse_refusal("unrecognized request")
+    same = _SAME.match(raw)
+    if same is not None:
+        last = store / "last_spec.json"
+        if not last.is_file():
+            return _parse_refusal("no previous spec")
+        try:
+            previous = json.loads(last.read_text())
+            foil = parse_naca(previous["naca"])
+            speed = float(previous["u_ms"])
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return _parse_refusal("no previous spec")
+        alpha = float(same.group("alpha"))
+        if not (Bounds.alpha_min <= alpha <= Bounds.alpha_max):
+            return _parse_refusal("alpha outside bounds")
+        if not (Bounds.u_min <= speed <= Bounds.u_max):
+            return _parse_refusal("speed outside bounds")
+        return _study(_spec(foil.code(), alpha, speed), "max_ld", True, ())
+    classic = _CLASSIC.match(raw)
+    if classic is not None:
+        try:
+            foil = parse_naca(classic.group("naca"))
+        except ValueError as exc:
+            return _parse_refusal(str(exc))
+        alpha = float(classic.group("alpha"))
+        speed_text = classic.group("speed")
+        speed = float(speed_text) if speed_text is not None else float(Bounds.u_default)
+        if not (Bounds.alpha_min <= alpha <= Bounds.alpha_max):
+            return _parse_refusal("alpha outside bounds")
+        if not (Bounds.u_min <= speed <= Bounds.u_max):
+            return _parse_refusal("speed outside bounds")
+        if not (Bounds.t_min <= foil.t <= Bounds.t_max):
+            return _parse_refusal("thickness outside bounds")
+        return _study(_spec(foil.code(), alpha, speed), _objective(raw), True, ())
+    if _NACA_CODE.search(raw) is None and not re.search(r"\bwing\b", raw, re.IGNORECASE):
+        if _LOW.search(raw) is None and _HIGH.search(raw) is None:
+            return _parse_refusal("unrecognized request")
+    angle_match = _ANGLE.search(raw)
+    stated_alpha: float | None = None
+    if angle_match is not None:
+        stated_alpha = float(angle_match.group("alpha"))
+        if not (Bounds.alpha_min <= stated_alpha <= Bounds.alpha_max):
+            return _parse_refusal("alpha outside bounds")
+    speed, speed_given = _speed_of(raw)
+    if not (Bounds.u_min <= speed <= Bounds.u_max):
+        return _parse_refusal("speed outside bounds")
+    code_match = _NACA_CODE.search(raw)
+    naca: str | None
+    if code_match is None:
+        asked = _ask_naca(store, reply)
+        if isinstance(asked, Refusal):
+            return asked
+        naca = asked
+    else:
+        try:
+            naca = parse_naca(code_match.group("naca")).code()
+        except ValueError as exc:
+            return _parse_refusal(str(exc))
+    if stated_alpha is None:
+        asked_alpha = _ask_alpha(store, reply)
+        if isinstance(asked_alpha, Refusal):
+            return asked_alpha
+        alpha = float(asked_alpha)
+    else:
+        alpha = stated_alpha
+    notes: list[str] = []
+    if not speed_given:
+        notes.append(f"Speed was not in the question. Using { _tok(speed) } m/s.")
+    objective = _objective(raw)
+    if objective == "min_cd":
+        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for lower drag.")
+    elif objective == "max_cl":
+        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for higher lift.")
+    else:
+        notes.append("The direct case is the start. After it, nearby camber and thickness are searched for higher lift over drag.")
+    return _study(_spec(naca, alpha, speed), objective, True, tuple(notes))
