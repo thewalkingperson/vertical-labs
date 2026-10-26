@@ -103,7 +103,9 @@ class Bounds:
     far_x_out = 12.0
     far_y = 8.0
     z_thickness = 0.1
-    end_time = 600
+    end_time = 1500
+    force_drift_window = 100
+    force_drift_max = 1e-4
     mesh_budget = 3
     solve_budget = 2
     max_agent_turns = 12
@@ -354,6 +356,14 @@ def judge_solve(ev: Mapping[str, object]) -> bool:
     elapsed = ev.get("elapsed_s")
     if elapsed is not None and float(elapsed) >= Bounds.solve_timeout_s:
         return False
+    for key in ("force_drift_cl", "force_drift_cd"):
+        if key not in ev or ev.get(key) is None:
+            continue
+        try:
+            if float(ev[key]) > Bounds.force_drift_max:  # type: ignore[arg-type]
+                return False
+        except (TypeError, ValueError):
+            return False
     return True
 
 
@@ -402,7 +412,9 @@ def physics_check(
     supported Reynolds range. A missing reference, an out-of-range Reynolds
     number, a low-confidence analysis, or a lift outside tolerance fails closed.
     Drag is reported and checked by the refinement delta, not by this band.
-    Reference Cd is recorded and is not a pass or fail. y+ is not part of this check.
+    Reference Cd is recorded and is not a pass or fail. A forced-transition
+    polar is recorded after the free-transition reference clears the confidence
+    floor, and that polar is not a pass or fail. y+ is not part of this check.
     """
     try:
         measured = float(cl)
@@ -465,6 +477,7 @@ def physics_check(
         "model": reference.model,
         "source": reference.source,
         "reynolds": reynolds,
+        "reference_xtr": reference.xtr,
         "reference_cl": reference.cl,
         "reference_cd": reference.cd,
         "reference_cm": reference.cm,
@@ -474,6 +487,16 @@ def physics_check(
         "tolerance": tolerance,
         "passes": passes,
     }
+    try:
+        forced = reference_polar(reference.naca, reference.alpha_deg, reference.reynolds, 0.0)
+    except (ReferenceError, ValueError) as exc:
+        evidence["forced_error"] = str(exc)
+    else:
+        evidence["forced_xtr"] = forced.xtr
+        evidence["forced_cl"] = forced.cl
+        evidence["forced_cd"] = forced.cd
+        evidence["forced_cm"] = forced.cm
+        evidence["forced_confidence"] = forced.confidence
     reason = (
         f"{reference.model} reference: measured Cl {measured:.4f}; "
         f"reference Cl {reference.cl:.4f}; difference {difference:+.4f}; "
@@ -519,7 +542,7 @@ def shape(ledger: list[dict]) -> str:
         if (
             stage == "solve"
             and status == "red"
-            and receipt.get("failure") in ("fatal", "wall_clock")
+            and receipt.get("failure") in ("fatal", "wall_clock", "not_converged")
         ):
             dest = "solve_closed"
         current = dest
@@ -681,10 +704,10 @@ def _edge_allowed(ledger: list[dict], stage: str, status: str, commit: Commit) -
             for item in ledger
             if item.get("stage") == "solve"
             and item.get("status") == "red"
-            and item.get("failure") not in ("fatal", "wall_clock")
+            and item.get("failure") not in ("fatal", "wall_clock", "not_converged")
         ]
         if status == "red":
-            if failure in ("fatal", "wall_clock"):
+            if failure in ("fatal", "wall_clock", "not_converged"):
                 return None
             if len(residuals) >= Bounds.solve_budget:
                 return "solve budget exhausted"
@@ -1139,6 +1162,8 @@ def _bounds_comment() -> str:
             f"# n_normal {Bounds.n_normal}",
             f"# farfield x [{Bounds.far_x_in}, {Bounds.far_x_out}] y [{-Bounds.far_y}, {Bounds.far_y}] z [0, {Bounds.z_thickness}]",
             f"# end_time {Bounds.end_time}",
+            f"# force_drift_window {Bounds.force_drift_window}",
+            f"# force_drift_max {Bounds.force_drift_max}",
             f"# mesh_budget {Bounds.mesh_budget}",
             f"# solve_budget {Bounds.solve_budget}",
             f"# max_agent_turns {Bounds.max_agent_turns}",
@@ -1230,6 +1255,11 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:yplus_min ] ;
   sh:property [ sh:path wl:yplus_max ] ;
   sh:property [ sh:path wl:yplus_avg ] ;
+  sh:property [ sh:path wl:force_drift_cl ] ;
+  sh:property [ sh:path wl:force_drift_cd ] ;
+  sh:property [ sh:path wl:force_iterations ] ;
+  sh:property [ sh:path wl:cd_pressure ] ;
+  sh:property [ sh:path wl:cd_viscous ] ;
   sh:property [ sh:path wl:failure ] ;
   sh:property [ sh:path wl:cl ] ;
   sh:property [ sh:path wl:cd ] ;

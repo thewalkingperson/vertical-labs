@@ -2,7 +2,7 @@
 
 > **Superseded on 2026-10-25.** Do not copy the withdrawn wall-resolved claim or the old lift band back into the tree. The production case is wall-modeled Spalart–Allmaras with `nutUSpaldingWallFunction`. y+ is recorded and is not required to be below 1. Do not switch the wall function to `nutLowReWallFunction`. The lift band is `max(0.03, 0.05 * abs(Cl_ref))` with minimum confidence `0.90`. Design grade is force agreement between the parent mesh and a 20% chordwise refinement. It is not mesh independence and it is not a flight-hardware release. Do not fail the physics gate on NeuralFoil Cd. Do not restore `reference_abs = 0.12`, `reference_rel = 0.15`, or `reference_min_confidence = 0.50`.
 
-**Status:** this brief has been applied. Do not treat the steps below as open work. Where a step still quotes an old fixture (`Cl` 0.86, 9600 cells) or an old assertion, the tree has moved on. `README.md` and `DESIGN.md` are the contract.
+**Status:** this brief has been applied. Do not treat the steps below as open work. Where a step still quotes an old fixture (`Cl` 0.86, 9600 cells) or an old assertion, the tree has moved on. `README.md` and `DESIGN.md` are the contract. The current case clusters the leading edge at ratio 16 and runs 1500 iterations, then requires the last-100 versus previous-100 force drift to stay within 1e-4. A ratio-16 parent at iteration 1500 measured Cl 0.9000 and Cd 0.02691 and was refused because the lift drift was 0.00146.
 
 **Audience:** the coding agent implementing the fix in `/Users/saarthakbhatia/Documents/vertical-labs`.
 **Goal:** make a live agent-driven NACA 2412 case use a defensible, wall-modeled turbulent RANS physics model, compare it to a real external polar, and reach `DesignGrade` through the existing refine path.

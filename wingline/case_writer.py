@@ -187,6 +187,105 @@ def parse_force_coeffs(text: str) -> dict:
     }
 
 
+def force_history(text: str) -> list[tuple[float, float, float]]:
+    """(time, Cd, Cl) from coefficient.dat. Cd(f) and Cd(r) are axles, not this split."""
+    lines = text.splitlines()
+    header_at: int | None = None
+    header: list[str] | None = None
+    for index, line in enumerate(lines):
+        tokens = _header_tokens(line)
+        if "Cl" in tokens and "Cd" in tokens:
+            header_at = index
+            header = tokens
+    if header is None or header_at is None:
+        return []
+    cl_at = header.index("Cl")
+    cd_at = header.index("Cd")
+    rows: list[tuple[float, float, float]] = []
+    for line in lines[header_at + 1 :]:
+        tokens = line.split()
+        if len(tokens) <= max(cl_at, cd_at):
+            continue
+        try:
+            rows.append((float(tokens[0]), float(tokens[cd_at]), float(tokens[cl_at])))
+        except ValueError:
+            continue
+    return rows
+
+
+def force_drift(text: str, window: int | None = None) -> dict:
+    """Mean of the last window against the previous window. Missing history stays unset."""
+    span = Bounds.force_drift_window if window is None else window
+    rows = force_history(text)
+    iterations = rows[-1][0] if rows else 0
+    if span < 1 or len(rows) < 2 * span:
+        return {"cl": None, "cd": None, "iterations": iterations}
+    earlier = rows[-2 * span : -span]
+    later = rows[-span:]
+    return {
+        "cl": abs(sum(row[2] for row in later) / span - sum(row[2] for row in earlier) / span),
+        "cd": abs(sum(row[1] for row in later) / span - sum(row[1] for row in earlier) / span),
+        "iterations": iterations,
+    }
+
+
+def force_coefficients(
+    text: str,
+    alpha_deg: float,
+    speed: float,
+    chord_m: float,
+    span_m: float,
+) -> dict[str, float] | None:
+    """Pressure and viscous Cd from a forces file. Not the axle columns in coefficient.dat."""
+    lines = text.splitlines()
+    header_at: int | None = None
+    header: list[str] | None = None
+    for index, line in enumerate(lines):
+        tokens = _header_tokens(line)
+        if "pressure_x" in tokens and "viscous_x" in tokens:
+            header_at = index
+            header = tokens
+    if header is None or header_at is None:
+        return None
+    needed = (
+        "pressure_x",
+        "pressure_y",
+        "pressure_z",
+        "viscous_x",
+        "viscous_y",
+        "viscous_z",
+    )
+    if any(name not in header for name in needed):
+        return None
+    index_of = {name: header.index(name) for name in needed}
+    width = max(index_of.values())
+    last: list[str] | None = None
+    for line in lines[header_at + 1 :]:
+        tokens = line.split()
+        if len(tokens) <= width:
+            continue
+        try:
+            float(tokens[0])
+            for name in needed:
+                float(tokens[index_of[name]])
+        except ValueError:
+            continue
+        last = tokens
+    if last is None:
+        return None
+    pressure = tuple(float(last[index_of[name]]) for name in needed[:3])
+    viscous = tuple(float(last[index_of[name]]) for name in needed[3:])
+    denom = 0.5 * float(Bounds.rho) * float(speed) ** 2 * float(chord_m) * float(span_m)
+    if not math.isfinite(denom) or denom == 0.0:
+        return None
+    radians = math.radians(float(alpha_deg))
+    drag = (math.cos(radians), math.sin(radians), 0.0)
+    return {
+        "cd_pressure": sum(part * axis for part, axis in zip(pressure, drag)) / denom,
+        "cd_viscous": sum(part * axis for part, axis in zip(viscous, drag)) / denom,
+    }
+
+
 def parse_cylinder(block_log: str, solver_log: str) -> dict:
     """Cylinder smoke: nCells, Continuity error, Interpolated velocity error."""
     blob = f"{block_log}\n{solver_log}"
@@ -246,6 +345,22 @@ def yplus_from_case(case: Path) -> dict[str, float] | None:
     if not chunks:
         return None
     return parse_yplus("\n".join(chunks))
+
+
+def forces_text_from_case(case: Path) -> str | None:
+    """Read every force.dat. A missing split is not a forces-receipt failure."""
+    root = Path(case) / "postProcessing"
+    if not root.is_dir():
+        return None
+    chunks: list[str] = []
+    for path in sorted(item for item in root.rglob("force.dat") if item.is_file()):
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    if not chunks:
+        return None
+    return "\n".join(chunks)
 
 
 def mesh_evidence(
@@ -428,15 +543,12 @@ def _hexes(div: Mapping[str, int], grading: float) -> list[_Hex]:
     """
     g = wall_grading_ratio(grading)
     # j=0 is the airfoil or the wake, so the wall-normal ratio is the plan grading.
-    # lead_lower's chordwise ratio is 2 (larger cells toward the LE). Ratio 1
-    # leaves lower-nose faces over the skew check at grading 8.
     grade = (1.0, g, 1.0)
-    # Chordwise ratio: larger cells toward the leading edge. The upper block's
-    # i-axis runs LE to crown, so its ratio is 1/2. The lower block's i-axis
-    # runs crown to LE, so its ratio is 2. Ratio 1 leaves the nose over the
-    # skew check on a symmetric section.
-    lead_upper_grade = (0.5, g, 1.0)
-    lead_lower_grade = (2.0, g, 1.0)
+    # Chordwise ratio 16 clusters the small cells at the leading edge.
+    # lead_upper's i-axis runs LE to crown, so its ratio is 16.
+    # lead_lower's i-axis runs crown to LE, so its ratio is 1/16.
+    lead_upper_grade = (16.0, g, 1.0)
+    lead_lower_grade = (1.0 / 16.0, g, 1.0)
     lead = (div["n_lead"], div["n_normal"], div["nz"])
     trail = (div["n_trail"], div["n_normal"], div["nz"])
     wake = (div["n_wake"], div["n_normal"], div["nz"])
@@ -680,12 +792,25 @@ functions
         lRef            {_fmt(c)};
         Aref            {_fmt(aref)};
     }}
+    forces
+    {{
+        type            forces;
+        libs            (forces);
+        writeControl    timeStep;
+        writeInterval   {Bounds.end_time};
+        patches         (walls);
+        p               p;
+        U               U;
+        rho             rhoInf;
+        rhoInf          {_fmt(Bounds.rho)};
+        CofR            {cofr};
+    }}
     yPlus
     {{
         type            yPlus;
         libs            (fieldFunctionObjects);
         writeControl    timeStep;
-        writeInterval   600;
+        writeInterval   {Bounds.end_time};
         writeFields     false;
     }}
 }}

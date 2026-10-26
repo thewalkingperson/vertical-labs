@@ -9,6 +9,8 @@ from wingline.case_writer import (
     mesh_evidence,
     parse_check_mesh,
     parse_cylinder,
+    force_coefficients,
+    force_drift,
     parse_force_coeffs,
     parse_simple_foam,
     parse_yplus,
@@ -22,6 +24,7 @@ from wingline.kernel import (
     judge_mesh,
     judge_pilot,
     judge_solve,
+    shape,
 )
 
 FIX = Path(__file__).resolve().parents[1] / "fixtures" / "naca2412-a6"
@@ -119,7 +122,8 @@ def test_block_mesh_keeps_cell_formula_and_unique_edges() -> None:
     child_hexes = re.findall(r"hex\s+\([^)]+\)\s+\((\d+)\s+(\d+)\s+(\d+)\)", child_mesh)
     child_total = sum(int(nx) * int(ny) * int(nz) for nx, ny, nz in child_hexes)
     assert child_total == cell_count(60, "refined") == 76_800
-    assert "simpleGrading (0.5 1000 1)" in text
+    assert "simpleGrading (16 1000 1)" in text
+    assert "simpleGrading (0.0625 1000 1)" in text
     pairs = re.findall(r"polyLine\s+(\d+)\s+(\d+)", text)
     unique = {frozenset(pair) for pair in pairs}
     assert len(pairs) == len(unique) == 8
@@ -237,3 +241,57 @@ def test_recorded_yplus_does_not_fail_the_solve() -> None:
     del evidence["yplus_max"]
     del evidence["yplus_avg"]
     assert judge_solve(evidence) is True
+    evidence["force_drift_cl"] = 1e-3
+    evidence["force_drift_cd"] = 1e-6
+    assert judge_solve(evidence) is False
+    evidence["force_drift_cl"] = 1e-5
+    evidence["force_drift_cd"] = 1e-5
+    assert judge_solve(evidence) is True
+
+
+def _coeff_table(rows: list[tuple[float, float, float]]) -> str:
+    lines = ["# Time Cd Cl"]
+    lines.extend(f"{time} {cd} {cl}" for time, cd, cl in rows)
+    return "\n".join(lines) + "\n"
+
+
+def test_force_drift_of_a_ramp_is_unsettled() -> None:
+    earlier = [(float(step), 0.020, 0.80) for step in range(1, 101)]
+    later = [(float(step), 0.0202, 0.8002) for step in range(101, 201)]
+    drift = force_drift(_coeff_table(earlier + later))
+    assert drift["iterations"] == pytest.approx(200)
+    assert drift["cl"] == pytest.approx(2e-4)
+    assert drift["cd"] == pytest.approx(2e-4)
+    assert drift["cl"] > Bounds.force_drift_max
+
+
+def test_force_drift_of_a_settled_tail_is_inside_the_bound() -> None:
+    rows = [(float(step), 0.020, 0.80) for step in range(1, 201)]
+    drift = force_drift(_coeff_table(rows))
+    assert drift["cl"] == pytest.approx(0.0)
+    assert drift["cd"] == pytest.approx(0.0)
+    short = force_drift(_coeff_table(rows[:50]))
+    assert short["cl"] is None
+    assert short["cd"] is None
+    assert short["iterations"] == pytest.approx(50)
+
+
+def test_not_converged_closes_the_solve() -> None:
+    ledger = [
+        {"stage": "pilot", "status": "green"},
+        {"stage": "scope", "status": "green"},
+        {"stage": "mesh", "status": "green"},
+        {"stage": "solve", "status": "red", "failure": "not_converged"},
+    ]
+    assert shape(ledger) == "solve_closed"
+
+
+def test_forces_file_splits_pressure_and_viscous_drag() -> None:
+    text = """\
+# Time total_x total_y total_z pressure_x pressure_y pressure_z viscous_x viscous_y viscous_z
+1500 1.5 0 0 1 0 0 0.5 0 0
+"""
+    split = force_coefficients(text, 0.0, 10.0, 1.0, 0.1)
+    assert split is not None
+    assert split["cd_pressure"] == pytest.approx(0.2)
+    assert split["cd_viscous"] == pytest.approx(0.1)

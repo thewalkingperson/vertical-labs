@@ -46,11 +46,14 @@ def test_default_wing_keeps_the_unit_chord_references() -> None:
     assert "writeInterval   20;" in control
     assert "purgeWrite      10;" in control
     assert control.count("writeInterval   1;") == 1
+    assert control.count("writeInterval   1500;") == 2
+    assert "type            forces;" in control
+    assert "rhoName" not in control
+    assert control.count("rho             rhoInf;") == 2
     assert "type            yPlus;" in control
     assert "libs            (fieldFunctionObjects);" in control
-    assert "writeInterval   600;" in control
     assert "writeFields     false;" in control
-    assert "endTime         600;" in control
+    assert "endTime         1500;" in control
     assert "(-8 0 0) // 0" in mesh
     assert "(-8 0 0.1) // 12" in mesh
     assert _z_values(mesh) == {"0", "0.1"}
@@ -170,7 +173,9 @@ def test_one_physics_model_rejects_the_low_re_lift() -> None:
     assert judge_physics(2.0, "2412", 6, 10, 1.0) is False
     assert Bounds.nu == 1.5e-5
     assert Bounds.n_normal == 160
-    assert Bounds.end_time == 600
+    assert Bounds.end_time == 1500
+    assert Bounds.force_drift_window == 100
+    assert Bounds.force_drift_max == 1e-4
     assert Bounds.continuity_local == 1e-4
     assert Bounds.reference_abs == 0.03
     assert Bounds.reference_rel == 0.05

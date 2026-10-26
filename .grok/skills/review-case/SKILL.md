@@ -17,5 +17,7 @@ Reply with one JSON object and nothing else:
 Affirm only when every receipt is green, the cell count matches, the local
 continuity residual is inside the bound, Cd is positive, and Cl is inside the
 NeuralFoil tolerance. Otherwise challenge. Reference Cd is context, not a
-pass or fail. y+ is reported when present and is not required to be below 1.
+pass or fail. A forced-transition Cd, cd_pressure, and cd_viscous are context.
+A green solve has force_drift_cl and force_drift_cd at or below the bound when
+those fields are present. y+ is reported when present and is not required to be below 1.
 You cannot pass a run. You cannot edit a gate.

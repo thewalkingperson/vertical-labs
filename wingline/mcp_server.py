@@ -22,6 +22,9 @@ from wingline.case_writer import (
     parse_cylinder,
     parse_force_coeffs,
     parse_simple_foam,
+    force_coefficients,
+    force_drift,
+    forces_text_from_case,
     yplus_from_case,
     render,
     open_parafoam,
@@ -345,7 +348,7 @@ def _solve_reds(receipts: list[dict]) -> list[dict]:
         for item in receipts
         if item.get("stage") == "solve"
         and item.get("status") == "red"
-        and item.get("failure") not in ("fatal", "wall_clock")
+        and item.get("failure") not in ("fatal", "wall_clock", "not_converged")
     ]
 
 
@@ -660,6 +663,26 @@ def commit_solve(run_id: str, lease: str, u_relax: Relax, non_ortho: Ortho) -> d
         evidence["yplus_min"] = measured_yplus["min"]
         evidence["yplus_max"] = measured_yplus["max"]
         evidence["yplus_avg"] = measured_yplus["avg"]
+    history = case / "postProcessing" / "forceCoeffs" / "0" / "coefficient.dat"
+    drift = (
+        force_drift(_read(history))
+        if history.is_file()
+        else {"cl": None, "cd": None, "iterations": 0}
+    )
+    if drift["cl"] is not None:
+        evidence["force_drift_cl"] = drift["cl"]
+    if drift["cd"] is not None:
+        evidence["force_drift_cd"] = drift["cd"]
+    evidence["force_iterations"] = drift["iterations"]
+    if evidence["failure"] in ("none", None):
+        unsettled = (
+            drift["cl"] is None
+            or drift["cd"] is None
+            or float(drift["cl"]) > Bounds.force_drift_max
+            or float(drift["cd"]) > Bounds.force_drift_max
+        )
+        if unsettled:
+            evidence["failure"] = "not_converged"
     commit = Commit(
         run_id=run_id,
         stage="solve",
@@ -698,6 +721,18 @@ def commit_forces(run_id: str, lease: str) -> dict:
         evidence["cl"] = parsed["cl"]
     if parsed["cd"] is not None:
         evidence["cd"] = parsed["cd"]
+    split_text = forces_text_from_case(case)
+    if split_text:
+        split = force_coefficients(
+            split_text,
+            float(spec.get("alpha_deg", 0.0)),
+            float(spec.get("u_ms", 10.0)),
+            float(spec.get("chord_m", Bounds.chord_m)),
+            float(spec.get("span_m", Bounds.z_thickness)),
+        )
+        if split is not None:
+            evidence["cd_pressure"] = split["cd_pressure"]
+            evidence["cd_viscous"] = split["cd_viscous"]
     commit = Commit(
         run_id=run_id,
         stage="forces",

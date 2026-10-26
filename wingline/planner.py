@@ -125,7 +125,7 @@ def _halt(result: dict) -> bool:
         return True
     if result.get("status") == "stopped":
         return True
-    if result.get("failure") in ("wall_clock", "fatal"):
+    if result.get("failure") in ("wall_clock", "fatal", "not_converged"):
         return True
     if result.get("why") in ("wall_clock", "fatal", "budget", "repeated_mesh"):
         return result.get("status") == "stopped"

@@ -27,6 +27,7 @@ class Reference:
     confidence: float
     model: str = "NeuralFoil"
     source: str = "neuralfoil 0.3.3 / aerosandbox 4.2.10"
+    xtr: float = 1.0
 
 
 def _scalar(value: object) -> float:
@@ -42,11 +43,18 @@ def _scalar(value: object) -> float:
 
 
 @lru_cache(maxsize=512)
-def reference_polar(naca: str, alpha_deg: float, reynolds: float) -> Reference:
+def reference_polar(
+    naca: str,
+    alpha_deg: float,
+    reynolds: float,
+    xtr: float = 1.0,
+) -> Reference:
     """Return one external polar point.
 
-    The caller owns the Reynolds-range policy. This function only rejects
-    malformed codes or numbers and reports an unavailable dependency.
+    xtr is the forced transition location on both surfaces. 1 leaves NeuralFoil
+    on its free-transition default. 0 forces transition at the nose. The caller
+    owns the Reynolds-range policy. This function only rejects malformed codes
+    or numbers and reports an unavailable dependency.
     """
     code = str(naca)
     if len(code) != 4 or not code.isdigit():
@@ -55,6 +63,8 @@ def reference_polar(naca: str, alpha_deg: float, reynolds: float) -> Reference:
         raise ReferenceError("alpha is not finite")
     if not math.isfinite(reynolds) or reynolds <= 0:
         raise ReferenceError("Reynolds number is not positive")
+    if not math.isfinite(xtr) or not 0.0 <= float(xtr) <= 1.0:
+        raise ReferenceError("transition location is outside 0..1")
 
     try:
         import neuralfoil as nf
@@ -69,6 +79,8 @@ def reference_polar(naca: str, alpha_deg: float, reynolds: float) -> Reference:
             airfoil=Airfoil(f"naca{code}"),
             alpha=float(alpha_deg),
             Re=float(reynolds),
+            xtr_upper=float(xtr),
+            xtr_lower=float(xtr),
         )
     except Exception as exc:
         raise ReferenceError(f"NeuralFoil analysis failed: {exc}") from exc
@@ -81,4 +93,5 @@ def reference_polar(naca: str, alpha_deg: float, reynolds: float) -> Reference:
         cd=_scalar(aero["CD"]),
         cm=_scalar(aero["CM"]),
         confidence=_scalar(aero["analysis_confidence"]),
+        xtr=float(xtr),
     )

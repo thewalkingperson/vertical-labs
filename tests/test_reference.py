@@ -2,7 +2,7 @@
 
 import pytest
 
-from wingline.kernel import Bounds, judge_physics
+from wingline.kernel import Bounds, judge_physics, physics_check
 from wingline.reference import Reference, ReferenceError, reference_polar
 
 
@@ -60,3 +60,16 @@ def test_low_confidence_reference_fails(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(kernel, "reference_polar", low)
     assert judge_physics(0.882459, "2412", 6, 10, 1.0) is False
+
+
+def test_forced_transition_polar_is_context() -> None:
+    pytest.importorskip("neuralfoil")
+    forced = reference_polar("2412", 6.0, 666666.6666666666, 0.0)
+    assert forced.cl == pytest.approx(0.86499, abs=0.005)
+    assert forced.cd == pytest.approx(0.01392, abs=0.001)
+    assert forced.confidence < Bounds.reference_min_confidence
+    ok, evidence, _reason = physics_check(0.882459, "2412", 6, 10, 1.0)
+    assert ok is True
+    assert evidence["reference_cd"] == pytest.approx(0.01002, abs=0.001)
+    assert evidence["forced_cd"] == pytest.approx(0.01392, abs=0.001)
+    assert evidence["forced_confidence"] < Bounds.reference_min_confidence

@@ -10,7 +10,9 @@
 # thickness [6, 24]
 # n_normal 160
 # farfield x [-8.0, 12.0] y [-8.0, 8.0] z [0, 0.1]
-# end_time 600
+# end_time 1500
+# force_drift_window 100
+# force_drift_max 0.0001
 # mesh_budget 3
 # solve_budget 2
 # max_agent_turns 12
@@ -90,6 +92,11 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:yplus_min ] ;
   sh:property [ sh:path wl:yplus_max ] ;
   sh:property [ sh:path wl:yplus_avg ] ;
+  sh:property [ sh:path wl:force_drift_cl ] ;
+  sh:property [ sh:path wl:force_drift_cd ] ;
+  sh:property [ sh:path wl:force_iterations ] ;
+  sh:property [ sh:path wl:cd_pressure ] ;
+  sh:property [ sh:path wl:cd_viscous ] ;
   sh:property [ sh:path wl:failure ] ;
   sh:property [ sh:path wl:cl ] ;
   sh:property [ sh:path wl:cd ] ;

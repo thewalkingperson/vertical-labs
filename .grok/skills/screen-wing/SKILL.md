@@ -21,8 +21,8 @@ stream 100, grading 8. The refined child's first mesh is stream 60, grading 8.
 The first solve is u_relax 0.5, non_ortho 1.
 High skew gets milder grading (4, then 2) in the current density's table. High
 non-orthogonality gets stream 80. On a residual red, under-relax velocity
-(0.5, then 0.3) and then add a non-orthogonal corrector. Stop on stopped or
-wall_clock. Do not loosen max_skew.
+(0.5, then 0.3) and then add a non-orthogonal corrector. Stop on stopped,
+wall_clock, or not_converged. Do not loosen max_skew.
 
 Stay on this spec. Do not propose another wing. Do not ask the user questions. Do not grade the run and do not call a coefficient a design.
 
