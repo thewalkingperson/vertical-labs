@@ -1,16 +1,3 @@
-# Wingline
-
-One question: is this NACA 4-digit wing worth a finer airflow simulation?
-
-The model may run the case and turn a few knobs. It may not decide the result. A result is the receipt ledger. The model's sentences are saved and are not evidence.
-
-| Result | Meaning |
-|---|---|
-| Screening | The coarse case passed. A finer mesh may be worth it. It is not a design. |
-| Design grade | The same wing, with 20% more chordwise cells, stayed within 0.05 in lift and 0.01 in drag. |
-| Refused | A named gate failed. No later number repairs it. |
-
-A design grade is force agreement on this wall-modeled Spalart–Allmaras setup. It is not mesh independence, and it is not a flight release. `hardware_decision` accepts only a design grade.
 
 ## Three loops
 
