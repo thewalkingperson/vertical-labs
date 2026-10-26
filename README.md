@@ -4,7 +4,7 @@ Wingline runs one NACA 4-digit wing through OpenFOAM and says whether that coars
 
 ## Run
 
-You need OpenFOAM v2606 (`openfoam` on `PATH`), Lean, and Grok. Stay below mcp 2.
+You need OpenFOAM v2606 (`openfoam` on `PATH`), Lean, and Grok/another AI provider(I have some free grok credits so I just used that).
 
 ```bash
 cd /path/to/vertical-labs
