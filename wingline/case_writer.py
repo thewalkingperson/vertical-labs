@@ -1,6 +1,7 @@
-"""Render a laminar NACA case, parse foam logs, flock, and append receipts.
+"""Render a wall-modeled Spalart-Allmaras RANS case, parse foam logs, and append receipts.
 
-OpenFOAM is started only from run_foam, as ["openfoam", "-c", snippet].
+The wall condition is nutUSpaldingWallFunction. y+ is recorded and is not a gate.
+OpenFOAM is started only from run_foam and open_parafoam, as ["openfoam", "-c", snippet].
 """
 
 from __future__ import annotations
@@ -24,8 +25,10 @@ from wingline.kernel import (
     Admission,
     admit,
     cell_count,
+    first_cell_height,
     load_ledger,
     parse_naca,
+    wall_grading_ratio,
 )
 
 # Fixed launcher strings. No model text is concatenated into these.
@@ -98,14 +101,16 @@ def parse_check_mesh(text: str) -> dict:
 
 
 def parse_simple_foam(text: str, elapsed_s: float) -> dict:
-    """Last cumulative continuity on a continuity line, plus ExecutionTime."""
-    cumulatives = re.findall(
-        rf"continuity[^\n]*cumulative\s*=\s*({_NUM})",
-        text,
-        re.IGNORECASE,
-    )
-    if not cumulatives:
-        cumulatives = re.findall(rf"cumulative\s*=\s*({_NUM})", text, re.IGNORECASE)
+    """Last local, global, and cumulative continuity, plus ExecutionTime.
+
+    The solve passes on the final local residual when the log has one.
+    Cumulative continuity is kept for older logs.
+    """
+    locals_ = re.findall(rf"sum local\s*=\s*({_NUM})", text, re.IGNORECASE)
+    globals_ = re.findall(rf"global\s*=\s*({_NUM})", text, re.IGNORECASE)
+    cumulatives = re.findall(rf"cumulative\s*=\s*({_NUM})", text, re.IGNORECASE)
+    continuity_local = float(locals_[-1]) if locals_ else None
+    continuity_global = float(globals_[-1]) if globals_ else None
     continuity = float(cumulatives[-1]) if cumulatives else None
     finished = "ExecutionTime" in text
     fatal = "FOAM FATAL" in text
@@ -113,11 +118,17 @@ def parse_simple_foam(text: str, elapsed_s: float) -> dict:
         failure = "fatal"
     elif elapsed_s >= Bounds.solve_timeout_s:
         failure = "wall_clock"
-    elif (not finished) or continuity is None or continuity > Bounds.continuity_cum:
+    elif not finished:
         failure = "residual"
+    elif continuity_local is not None:
+        failure = "none" if continuity_local <= Bounds.continuity_local else "residual"
+    elif continuity is not None:
+        failure = "none" if continuity <= Bounds.continuity_cum else "residual"
     else:
-        failure = "none"
+        failure = "residual"
     return {
+        "continuity_local": continuity_local,
+        "continuity_global": continuity_global,
         "continuity_cum": continuity,
         "finished": finished,
         "fatal": fatal,
@@ -193,6 +204,50 @@ def parse_cylinder(block_log: str, solver_log: str) -> dict:
     }
 
 
+def parse_yplus(text: str) -> dict[str, float] | None:
+    """Highest-time wall row. A later all-zero max does not replace a positive max."""
+    rows: list[tuple[float, str, float, float, float]] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        parts = stripped.split()
+        if len(parts) < 5:
+            continue
+        try:
+            sampled = float(parts[0])
+            ymin = float(parts[2])
+            ymax = float(parts[3])
+            yavg = float(parts[4])
+        except ValueError:
+            continue
+        rows.append((sampled, parts[1], ymin, ymax, yavg))
+    if not rows:
+        return None
+    latest = max(row[0] for row in rows)
+    at_time = [row for row in rows if row[0] == latest]
+    walls = [row for row in at_time if row[1] == "walls" and row[3] > 0.0]
+    positive = [row for row in at_time if row[3] > 0.0]
+    chosen = (walls or positive or at_time)[-1]
+    return {"min": chosen[2], "max": chosen[3], "avg": chosen[4]}
+
+
+def yplus_from_case(case: Path) -> dict[str, float] | None:
+    """Read every yPlus*.dat. A missing table is not a solve failure."""
+    root = Path(case) / "postProcessing"
+    if not root.is_dir():
+        return None
+    chunks: list[str] = []
+    for path in sorted(root.rglob("yPlus*.dat")):
+        try:
+            chunks.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    if not chunks:
+        return None
+    return parse_yplus("\n".join(chunks))
+
+
 def mesh_evidence(
     block_text: str,
     check_text: str,
@@ -200,6 +255,7 @@ def mesh_evidence(
     cells_expected: int,
     stream: int,
     grading: int,
+    chord_m: float = 1.0,
 ) -> dict:
     """One mapping for judge_mesh / Commit."""
     block = parse_block_mesh(block_text)
@@ -209,6 +265,9 @@ def mesh_evidence(
         listed = re.search(r"^\s*cells:\s*(\d+)\s*$", check_text, re.MULTILINE)
         if listed:
             cells = int(listed.group(1))
+    ratio = wall_grading_ratio(grading)
+    # Far-field height scales with chord. The unit chord keeps the old height.
+    length = float(chord_m) * float(Bounds.far_y)
     return {
         "cells": cells,
         "cells_expected": cells_expected,
@@ -218,6 +277,9 @@ def mesh_evidence(
         "fatal": bool(check["fatal"] or block["fatal"]),
         "stream": stream,
         "grading": grading,
+        "n_normal": int(Bounds.n_normal),
+        "wall_grading": ratio,
+        "first_cell_m": first_cell_height(length, Bounds.n_normal, ratio),
         "log": "log.checkMesh",
         "log_text": check_text,
     }
@@ -244,32 +306,39 @@ def _camber(x: float, m: float, p: float) -> tuple[float, float]:
     return yc, dyc
 
 
-def naca_samples(naca: object, n: int = _NACA_SAMPLES) -> tuple[list[_Sample], int]:
-    """Closed-TE ordinates. n is the cosine denominator. Crown is max thickness."""
+def naca_samples(
+    naca: object, n: int = _NACA_SAMPLES, *, chord_m: float = 1.0
+) -> tuple[list[_Sample], int]:
+    """Closed-TE ordinates scaled by chord_m. n is the cosine denominator. Crown is max thickness."""
     foil = parse_naca(naca)
+    c = float(chord_m)
     m = foil.m / 100.0
     p = foil.p / 10.0
     t = foil.t / 100.0
     samples: list[_Sample] = []
     for i in range(n + 1):
-        x = 0.5 * (1.0 - math.cos(math.pi * i / n))
-        yt = 5.0 * t * (
-            0.2969 * math.sqrt(max(x, 0.0))
-            - 0.1260 * x
-            - 0.3516 * x * x
-            + 0.2843 * x**3
-            - 0.1036 * x**4
+        x_norm = 0.5 * (1.0 - math.cos(math.pi * i / n))
+        yt_norm = 5.0 * t * (
+            0.2969 * math.sqrt(max(x_norm, 0.0))
+            - 0.1260 * x_norm
+            - 0.3516 * x_norm * x_norm
+            + 0.2843 * x_norm**3
+            - 0.1036 * x_norm**4
         )
-        yc, dyc = _camber(x, m, p)
-        theta = math.atan(dyc)
+        yc_norm, dyc_norm = _camber(x_norm, m, p)
+        theta = math.atan(dyc_norm)
         st = math.sin(theta)
         ct = math.cos(theta)
+        x_pt = (x_norm - yt_norm * st) * c
+        y_upper = (yc_norm + yt_norm * ct) * c
+        y_lower = (yc_norm - yt_norm * ct) * c
+        x_lower = (x_norm + yt_norm * st) * c
         samples.append(
             _Sample(
-                x=x,
-                yt=yt,
-                upper=(x - yt * st, yc + yt * ct),
-                lower=(x + yt * st, yc - yt * ct),
+                x=x_norm * c,
+                yt=yt_norm * c,
+                upper=(x_pt, y_upper),
+                lower=(x_lower, y_lower),
             )
         )
     crown = max(range(1, n), key=lambda i: samples[i].yt)
@@ -357,17 +426,22 @@ def _hexes(div: Mapping[str, int], grading: float) -> list[_Hex]:
     Lower blocks are the user's quads cycled so that edge stays j=0 and the
     corner order stays counter-clockwise. Upper blocks are the given order.
     """
-    g = float(grading)
+    g = wall_grading_ratio(grading)
     # j=0 is the airfoil or the wake, so the wall-normal ratio is the plan grading.
     # lead_lower's chordwise ratio is 2 (larger cells toward the LE). Ratio 1
     # leaves lower-nose faces over the skew check at grading 8.
     grade = (1.0, g, 1.0)
+    # Chordwise ratio: larger cells toward the leading edge. The upper block's
+    # i-axis runs LE to crown, so its ratio is 1/2. The lower block's i-axis
+    # runs crown to LE, so its ratio is 2. Ratio 1 leaves the nose over the
+    # skew check on a symmetric section.
+    lead_upper_grade = (0.5, g, 1.0)
     lead_lower_grade = (2.0, g, 1.0)
     lead = (div["n_lead"], div["n_normal"], div["nz"])
     trail = (div["n_trail"], div["n_normal"], div["nz"])
     wake = (div["n_wake"], div["n_normal"], div["nz"])
     return [
-        _Hex("lead_upper", (4, 5, 1, 0), lead, grade, (("walls", "ymin"), ("farfield", "ymax"))),
+        _Hex("lead_upper", (4, 5, 1, 0), lead, lead_upper_grade, (("walls", "ymin"), ("farfield", "ymax"))),
         _Hex("trail_upper", (5, 7, 2, 1), trail, grade, (("walls", "ymin"), ("farfield", "ymax"))),
         _Hex("wake_upper", (7, 8, 3, 2), wake, grade, (("farfield", "ymax"), ("outlet", "xmax"))),
         # (4 0 9 6) cycled to (6 4 0 9); airfoil edge is 4-6.
@@ -401,9 +475,9 @@ def _between(samples: list[_Sample], start: int, end: int, side: str) -> list[tu
 
 
 def _airfoil_edges(
-    samples: list[_Sample], crown: int
+    samples: list[_Sample], crown: int, span_m: float = 0.1
 ) -> list[tuple[int, int, list[tuple[float, float]]]]:
-    """Four surface edges, then the z=0.1 copies. Endpoints are vertices."""
+    """Four surface edges, then the z=span copies. Endpoints are vertices."""
     last = len(samples) - 1
     front = [
         (4, 5, _between(samples, 0, crown, "upper")),
@@ -413,8 +487,9 @@ def _airfoil_edges(
     ]
     edges: list[tuple[int, int, list[tuple[float, float]]]] = []
     seen: set[frozenset[int]] = set()
+    span = float(span_m)
     for a, b, pts in front:
-        for za, zb, z in ((a, b, 0.0), (a + 12, b + 12, Bounds.z_thickness)):
+        for za, zb, z in ((a, b, 0.0), (a + 12, b + 12, span)):
             pair = frozenset((za, zb))
             if pair in seen:
                 raise RuntimeError(f"duplicate edge {za} {zb}")
@@ -426,28 +501,38 @@ def _airfoil_edges(
     return edges
 
 
-def _vertices(samples: list[_Sample], crown: int) -> list[tuple[float, float, float]]:
+def _vertices(
+    samples: list[_Sample],
+    crown: int,
+    chord_m: float = 1.0,
+    span_m: float = 0.1,
+) -> list[tuple[float, float, float]]:
     le = samples[0].upper
     te_u = samples[-1].upper
     te_l = samples[-1].lower
     te = ((te_u[0] + te_l[0]) / 2.0, (te_u[1] + te_l[1]) / 2.0)
     x_crown = samples[crown].x
+    c = float(chord_m)
+    span = float(span_m)
+    far_x_in = Bounds.far_x_in * c
+    far_x_out = Bounds.far_x_out * c
+    far_y = Bounds.far_y * c
     xy = [
-        (Bounds.far_x_in, 0.0),
-        (x_crown, Bounds.far_y),
-        (1.0, Bounds.far_y),
-        (Bounds.far_x_out, Bounds.far_y),
+        (far_x_in, 0.0),
+        (x_crown, far_y),
+        (c, far_y),
+        (far_x_out, far_y),
         le,
         samples[crown].upper,
         samples[crown].lower,
         te,
-        (Bounds.far_x_out, te[1]),
-        (x_crown, -Bounds.far_y),
-        (1.0, -Bounds.far_y),
-        (Bounds.far_x_out, -Bounds.far_y),
+        (far_x_out, te[1]),
+        (x_crown, -far_y),
+        (c, -far_y),
+        (far_x_out, -far_y),
     ]
     verts: list[tuple[float, float, float]] = []
-    for z in (0.0, Bounds.z_thickness):
+    for z in (0.0, span):
         for x, y in xy:
             verts.append((x, y, z))
     return verts
@@ -476,8 +561,10 @@ def _block_mesh_dict(
     crown: int,
     blocks: list[_Hex],
     edges: list[tuple[int, int, list[tuple[float, float]]]],
+    chord_m: float = 1.0,
+    span_m: float = 0.1,
 ) -> str:
-    verts = _vertices(samples, crown)
+    verts = _vertices(samples, crown, chord_m=chord_m, span_m=span_m)
     xy = [(x, y) for x, y, z in verts[:12]]
     lines = [_foam("blockMeshDict", "dictionary"), "scale 1;", "", "vertices", "("]
     for index, (x, y, z) in enumerate(verts):
@@ -503,7 +590,7 @@ def _block_mesh_dict(
     lines.append("edges")
     lines.append("(")
     for a, b, pts in edges:
-        z = 0.0 if a < 12 else Bounds.z_thickness
+        z = 0.0 if a < 12 else float(span_m)
         lines.append(f"    polyLine {a} {b}")
         lines.append("    (")
         for x, y in pts:
@@ -548,9 +635,14 @@ def _block_mesh_dict(
     return "\n".join(lines) + "\n"
 
 
-def _control(alpha: float, speed: float) -> str:
+def _control(alpha: float, speed: float, chord_m: float = 1.0, span_m: float = 0.1) -> str:
     lift = _vec(-math.sin(alpha), math.cos(alpha), 0.0)
     drag = _vec(math.cos(alpha), math.sin(alpha), 0.0)
+    c = float(chord_m)
+    span = float(span_m)
+    aref = c * span
+    cofr = _vec(0.25 * c, 0.0, 0.0)
+    # Volume fields are kept every 20 steps. forceCoeffs still writes every step.
     return f"""{_foam("controlDict", "dictionary")}
 application     simpleFoam;
 
@@ -560,8 +652,8 @@ stopAt          endTime;
 endTime         {Bounds.end_time};
 deltaT          1;
 writeControl    timeStep;
-writeInterval   {Bounds.end_time};
-purgeWrite      1;
+writeInterval   20;
+purgeWrite      10;
 writeFormat     ascii;
 writePrecision  8;
 writeCompression off;
@@ -576,17 +668,25 @@ functions
         type            forceCoeffs;
         libs            (forces);
         writeControl    timeStep;
-        writeInterval   {Bounds.end_time};
+        writeInterval   1;
         patches         (walls);
         rho             rhoInf;
         rhoInf          {_fmt(Bounds.rho)};
-        CofR            (0.25 0 0);
+        CofR            {cofr};
         pitchAxis       (0 0 1);
         liftDir         {lift};
         dragDir         {drag};
         magUInf         {_fmt(speed)};
-        lRef            1;
-        Aref            {_fmt(Bounds.aref)};
+        lRef            {_fmt(c)};
+        Aref            {_fmt(aref)};
+    }}
+    yPlus
+    {{
+        type            yPlus;
+        libs            (fieldFunctionObjects);
+        writeControl    timeStep;
+        writeInterval   600;
+        writeFields     false;
     }}
 }}
 """
@@ -609,6 +709,7 @@ divSchemes
 {{
     default         none;
     div(phi,U)      bounded Gauss linearUpwind grad(U);
+    div(phi,nuTilda) bounded Gauss linearUpwind grad(nuTilda);
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 }}
 
@@ -625,6 +726,11 @@ interpolationSchemes
 snGradSchemes
 {{
     default         corrected;
+}}
+
+wallDist
+{{
+    method          meshWave;
 }}
 """
 
@@ -649,11 +755,26 @@ solvers
         tolerance       1e-8;
         relTol          0.1;
     }}
+
+    nuTilda
+    {{
+        solver          smoothSolver;
+        smoother        GaussSeidel;
+        nSweeps         2;
+        tolerance       1e-8;
+        relTol          0.1;
+    }}
 }}
 
 SIMPLE
 {{
     nNonOrthogonalCorrectors {int(non_ortho)};
+    residualControl
+    {{
+        p               1e-5;
+        U               1e-5;
+        nuTilda         1e-5;
+    }}
 }}
 
 relaxationFactors
@@ -665,6 +786,7 @@ relaxationFactors
     equations
     {{
         U               {_fmt(u_relax)};
+        nuTilda         0.7;
     }}
 }}
 """
@@ -674,13 +796,89 @@ def _transport() -> str:
     return f"""{_foam("transportProperties", "dictionary")}
 transportModel  Newtonian;
 
-nu              1e-2;
+nu              {_fmt(Bounds.nu)};
 """
 
 
 def _turbulence() -> str:
     return f"""{_foam("turbulenceProperties", "dictionary")}
-simulationType  laminar;
+simulationType  RAS;
+
+RAS
+{{
+    RASModel        SpalartAllmaras;
+    turbulence      on;
+    printCoeffs     on;
+}}
+"""
+
+
+def _nu_tilda() -> str:
+    freestream = _fmt(3.0 * Bounds.nu)
+    return f"""{_foam("nuTilda", "volScalarField")}
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform {freestream};
+
+boundaryField
+{{
+    farfield
+    {{
+        type            freestream;
+        freestreamValue $internalField;
+    }}
+
+    outlet
+    {{
+        type            freestream;
+        freestreamValue $internalField;
+    }}
+
+    walls
+    {{
+        type            fixedValue;
+        value           uniform 0;
+    }}
+
+    frontAndBack
+    {{
+        type            empty;
+    }}
+}}
+"""
+
+
+def _nut() -> str:
+    return f"""{_foam("nut", "volScalarField")}
+dimensions      [0 2 -1 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{{
+    farfield
+    {{
+        type            freestream;
+        freestreamValue $internalField;
+    }}
+
+    outlet
+    {{
+        type            freestream;
+        freestreamValue $internalField;
+    }}
+
+    walls
+    {{
+        type            nutUSpaldingWallFunction;
+        value           uniform 0;
+    }}
+
+    frontAndBack
+    {{
+        type            empty;
+    }}
+}}
 """
 
 
@@ -754,11 +952,13 @@ boundaryField
 def _geometry(spec: Mapping[str, object], mesh: Mapping[str, object]) -> tuple[
     list[_Sample], int, list[_Hex], list[tuple[int, int, list[tuple[float, float]]]]
 ]:
-    samples, crown = naca_samples(spec["naca"])
+    chord_m = float(spec.get("chord_m", 1.0))
+    span_m = float(spec.get("span_m", Bounds.z_thickness))
+    samples, crown = naca_samples(spec["naca"], chord_m=chord_m)
     div = _divisions(int(mesh["stream"]), str(spec["density"]))
-    xy = [(x, y) for x, y, _z in _vertices(samples, crown)[:12]]
+    xy = [(x, y) for x, y, _z in _vertices(samples, crown, chord_m=chord_m, span_m=span_m)[:12]]
     blocks = _orient(_hexes(div, float(mesh["grading"])), xy)
-    edges = _airfoil_edges(samples, crown)
+    edges = _airfoil_edges(samples, crown, span_m=span_m)
     return samples, crown, blocks, edges
 
 
@@ -766,16 +966,22 @@ def render(spec: Mapping[str, object], mesh: Mapping[str, object], solve: Mappin
     """Typed spec to case file text. Points stay at alpha = 0; alpha is the freestream."""
     alpha = math.radians(float(spec["alpha_deg"]))
     speed = float(spec["u_ms"])
+    chord_m = float(spec.get("chord_m", 1.0))
+    span_m = float(spec.get("span_m", Bounds.z_thickness))
     samples, crown, blocks, edges = _geometry(spec, mesh)
     return {
-        "system/blockMeshDict": _block_mesh_dict(samples, crown, blocks, edges),
-        "system/controlDict": _control(alpha, speed),
+        "system/blockMeshDict": _block_mesh_dict(
+            samples, crown, blocks, edges, chord_m=chord_m, span_m=span_m
+        ),
+        "system/controlDict": _control(alpha, speed, chord_m=chord_m, span_m=span_m),
         "system/fvSchemes": _schemes(),
         "system/fvSolution": _solution(float(solve["u_relax"]), int(solve["non_ortho"])),
         "constant/transportProperties": _transport(),
         "constant/turbulenceProperties": _turbulence(),
         "0/U": _velocity(alpha, speed),
         "0/p": _pressure(),
+        "0/nuTilda": _nu_tilda(),
+        "0/nut": _nut(),
     }
 
 
@@ -800,6 +1006,125 @@ def _kill_group(proc: subprocess.Popen) -> None:
         except ProcessLookupError:
             pass
         proc.wait(timeout=5)
+
+
+def _shell_quote(path: Path) -> str:
+    return "'" + str(path).replace("'", "'\\''") + "'"
+
+
+def _para_view(foam: Path) -> str:
+    """ParaView startup script. Shows the wing and the mid-span speed field."""
+    literal = json.dumps(str(foam))
+    return f"""from paraview.simple import *
+
+foam = {literal}
+walls = OpenFOAMReader(FileName=foam)
+walls.MeshRegions = ["patch/walls"]
+walls.CellArrays = ["p", "U"]
+flow = OpenFOAMReader(FileName=foam)
+flow.MeshRegions = ["internalMesh"]
+flow.CellArrays = ["U", "p"]
+flow.UpdatePipelineInformation()
+times = list(flow.TimestepValues)
+last = times[-1] if times else 0.0
+walls.UpdatePipeline(last)
+flow.UpdatePipeline(last)
+
+view = GetActiveViewOrCreate("RenderView")
+view.ViewTime = last
+view.Background = [0.08, 0.09, 0.11]
+view.UseColorPaletteForBackground = 0
+view.OrientationAxesVisibility = 1
+
+bounds = walls.GetDataInformation().GetBounds()
+span_x = bounds[1] - bounds[0]
+span_y = bounds[3] - bounds[2]
+if span_x <= 0.0 and span_y <= 0.0:
+    cx, cy, cz, chord = 0.5, 0.0, 0.05, 1.0
+else:
+    cx = (bounds[0] + bounds[1]) / 2.0
+    cy = (bounds[2] + bounds[3]) / 2.0
+    cz = (bounds[4] + bounds[5]) / 2.0
+    chord = max(span_x, span_y, 1e-6)
+
+plane = Slice(Input=flow)
+plane.SliceType = "Plane"
+plane.SliceType.Origin = [cx, cy, cz]
+plane.SliceType.Normal = [0.0, 0.0, 1.0]
+HideInteractiveWidgets(plane)
+speed = Show(plane, view)
+speed.Representation = "Surface"
+ColorBy(speed, ("CELLS", "U", "Magnitude"))
+speed.RescaleTransferFunctionToDataRange(True, False)
+lut = GetColorTransferFunction("U")
+lut.ApplyPreset("Cool to Warm", True)
+speed.SetScalarBarVisibility(view, True)
+bar = GetScalarBar(lut, view)
+bar.Title = "speed"
+bar.ComponentTitle = ""
+
+body = Show(walls, view)
+body.Representation = "Surface With Edges"
+ColorBy(body, ("CELLS", "p"))
+body.RescaleTransferFunctionToDataRange(True, False)
+body.SetScalarBarVisibility(view, False)
+body.EdgeColor = [0.95, 0.95, 0.95]
+body.LineWidth = 2.0
+
+for source in list(GetSources().values()):
+    if source not in (walls, flow, plane):
+        Hide(source, view)
+
+Render()
+camera = view.GetActiveCamera()
+camera.SetParallelProjection(True)
+camera.SetFocalPoint(cx, cy, cz)
+camera.SetPosition(cx, cy, cz + 5.0)
+camera.SetViewUp(0.0, 1.0, 0.0)
+camera.SetParallelScale(0.7 * chord)
+Render()
+"""
+
+
+def open_parafoam(case: Path) -> subprocess.Popen:
+    """Open this case in paraFoam and leave the window up. Fixed launcher, no shell=True."""
+    case = Path(case).resolve()
+    if not (case / "system" / "controlDict").is_file():
+        raise FileNotFoundError("case")
+    if not shutil.which("openfoam"):
+        raise RuntimeError("paraFoam's launcher is not on PATH")
+    foam = case / (case.name + ".foam")
+    script = case / "paraView.py"
+    script.write_text(_para_view(foam))
+    # ParaView 6 rejects --script together with --data, and paraFoam adds --data
+    # unless -touch is used. -touch writes the .foam file; the script then opens it.
+    snippet = (
+        "export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8; "
+        "paraFoam -vtk -touch -case "
+        + _shell_quote(case)
+        + " && paraview --script="
+        + _shell_quote(script)
+    )
+    log_path = case / "log.paraFoam"
+    log = log_path.open("ab")
+    try:
+        proc = subprocess.Popen(
+            ["openfoam", "-c", snippet],
+            cwd=case,
+            start_new_session=True,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+        )
+    finally:
+        log.close()
+    try:
+        code = proc.wait(timeout=8)
+    except subprocess.TimeoutExpired:
+        return proc
+    detail = ""
+    if log_path.is_file():
+        detail = log_path.read_text(errors="replace")[-2000:].strip()
+    raise RuntimeError(detail or f"paraFoam exited {code}")
 
 
 def run_foam(case: Path, which: str, timeout_s: int) -> int:
@@ -951,8 +1276,11 @@ def run_block_mesh(
             for index in indexes:
                 blocks[index] = blocks[index].flip()
                 flipped.append(blocks[index].name)
-            files = dict(files)
-            files["system/blockMeshDict"] = _block_mesh_dict(samples, crown, blocks, edges)
+            chord_m = float(spec.get("chord_m", 1.0))
+            span_m = float(spec.get("span_m", Bounds.z_thickness))
+            files["system/blockMeshDict"] = _block_mesh_dict(
+                samples, crown, blocks, edges, chord_m=chord_m, span_m=span_m
+            )
             write_case(dest, files)
             _clear_mesh(dest)
             code = run_foam(dest, "mesh", timeout)

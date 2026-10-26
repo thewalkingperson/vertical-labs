@@ -1,9 +1,9 @@
 -- Emitted from wingline.kernel Bounds and NEXT. Do not edit.
--- nu = 0.01
+-- nu = 1.5e-05
 -- delta_cl = 0.05
 -- delta_cd = 0.01
 -- screening: This mesh is not a design answer until the refinement gate passes.
--- design: Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release.
+-- design: Design grade is force agreement between the parent mesh and a 20% chordwise refinement on this wall-modeled Spalart-Allmaras setup. It is not mesh independence and it is not a flight-hardware release.
 
 inductive Shape where
   | empty
@@ -91,11 +91,11 @@ def taintedOf : Status → Bool
   | .red => true
   | .stopped => true
 
-/-- Report label. Design is one row: untainted forces-green, thin green,
+/-- Report label. Design is one row: untainted forces-green, physics green,
     review affirm, refinement green, and delta inside the emitted bound. -/
-def label (shape : Shape) (tainted thinGreen : Bool) (review : Review)
+def label (shape : Shape) (tainted physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool) : Label :=
-  match tainted, shape, thinGreen, review, refine, inside with
+  match tainted, shape, physicsGreen, review, refine, inside with
   | false, .forces_green, true, .affirm, .green, true => .design
   | false, .forces_green, true, _, _, _ => .screening
   | _, _, _, _, _, _ => .refusal
@@ -107,28 +107,28 @@ theorem delta_inside_bound_endpoints :
   decide
 
 theorem report_unreachable_after_failure
-    (shape : Shape) (prior : Status) (thinGreen : Bool) (review : Review)
+    (shape : Shape) (prior : Status) (physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool)
     (h : prior = .red ∨ prior = .stopped) :
-    label shape (taintedOf prior) thinGreen review refine inside ≠ .screening ∧
-    label shape (taintedOf prior) thinGreen review refine inside ≠ .design := by
-  cases h <;> cases prior <;> cases shape <;> cases thinGreen <;> cases review <;>
+    label shape (taintedOf prior) physicsGreen review refine inside ≠ .screening ∧
+    label shape (taintedOf prior) physicsGreen review refine inside ≠ .design := by
+  cases h <;> cases prior <;> cases shape <;> cases physicsGreen <;> cases review <;>
     cases refine <;> cases inside <;> simp [label, taintedOf] at *
 
 theorem design_needs_refinement
-    (shape : Shape) (tainted thinGreen : Bool) (review : Review)
+    (shape : Shape) (tainted physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool)
-    (h : label shape tainted thinGreen review refine inside = .design) :
+    (h : label shape tainted physicsGreen review refine inside = .design) :
     refine = .green ∧ inside = true ∧ review = .affirm := by
-  cases tainted <;> cases shape <;> cases thinGreen <;> cases review <;>
+  cases tainted <;> cases shape <;> cases physicsGreen <;> cases review <;>
     cases refine <;> cases inside <;> simp [label] at h
   all_goals try cases h
   exact ⟨rfl, rfl, rfl⟩
 
 theorem review_cannot_mint_design
-    (shape : Shape) (tainted thinGreen : Bool) (refine : Refine) (inside : Bool) :
-    label shape tainted thinGreen .challenge refine inside ≠ .design := by
-  cases shape <;> cases tainted <;> cases thinGreen <;> cases refine <;> cases inside <;>
+    (shape : Shape) (tainted physicsGreen : Bool) (refine : Refine) (inside : Bool) :
+    label shape tainted physicsGreen .challenge refine inside ≠ .design := by
+  cases shape <;> cases tainted <;> cases physicsGreen <;> cases refine <;> cases inside <;>
     simp [label]
   all_goals (intro contra; cases contra)
 

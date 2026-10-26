@@ -14,6 +14,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 
+from wingline.reference import ReferenceError, reference_polar
+
 SHAPES: tuple[str, ...] = (
     "empty",
     "pilot_red",
@@ -61,7 +63,7 @@ def _build_next() -> dict[str, tuple[tuple[str, str], ...]]:
 
 NEXT: dict[str, tuple[tuple[str, str], ...]] = _build_next()
 
-STREAMS: tuple[int, ...] = (60, 80)
+STREAMS: tuple[int, ...] = (60, 80, 100)
 GRADINGS: tuple[int, ...] = (2, 4, 8, 12)
 U_RELAX: tuple[float, ...] = (0.7, 0.5, 0.3)
 NON_ORTHO: tuple[int, ...] = (0, 1, 2)
@@ -86,39 +88,49 @@ class Bounds:
     u_max = 25.0
     u_default = 10.0
     chord_m = 1.0
-    nu = 1e-2
+    chord_min = 0.01
+    chord_max = 100.0
+    span_min = 0.001
+    span_max = 50.0
+    nu = 1.5e-5
     rho = 1.0
     aref = 0.1
     t_min = 6
-    t_max = 20
-    n_normal = 40
+    t_max = 24
+    n_normal = 160
+    wall_grading_scale = 125.0
     far_x_in = -8.0
     far_x_out = 12.0
     far_y = 8.0
     z_thickness = 0.1
-    end_time = 200
+    end_time = 600
     mesh_budget = 3
     solve_budget = 2
-    max_agent_turns = 8
+    max_agent_turns = 12
     max_non_ortho = 65.0
     max_skew = 4.0
+    continuity_local = 1e-4
     continuity_cum = 5e-3
+    reynolds_min = 1.0e5
+    reynolds_max = 5.0e6
+    reference_abs = 0.03
+    reference_rel = 0.05
+    reference_min_confidence = 0.90
     cylinder_cells = 2000
     cylinder_continuity = 5e-4
     cylinder_velocity = 5e-5
     delta_cl = 0.05
     delta_cd = 0.01
-    thin_abs = 0.25
-    thin_rel = 0.35
     mesh_timeout_s = 90
-    solve_timeout_s = 540
+    solve_timeout_s = 1800
     pilot_timeout_s = 180
     screening_sentence = (
         "This mesh is not a design answer until the refinement gate passes."
     )
     design_sentence = (
-        "Design grade is mesh agreement within the force-delta bound on this laminar setup. "
-        "It is not a flight-hardware release."
+        "Design grade is force agreement between the parent mesh and a 20% "
+        "chordwise refinement on this wall-modeled Spalart-Allmaras setup. "
+        "It is not mesh independence and it is not a flight-hardware release."
     )
 
 
@@ -266,35 +278,19 @@ def parse_naca(value: object) -> Naca4:
     return Naca4(int(text[0]), int(text[1]), int(text[2:]))
 
 
-def thin_cl(naca: Naca4 | str | dict, alpha_deg: float) -> float:
-    """81-point cosine quadrature of the NACA 4-digit mean line.
+def wall_grading_ratio(grading: float) -> float:
+    """Map the agent's small grading knob to the actual blockMesh ratio."""
+    return float(grading) * float(Bounds.wall_grading_scale)
 
-    x = (1 - cos θ) / 2, θ = 0..π. Cl = 2π (A0 + A1/2).
-    """
-    foil = naca if isinstance(naca, Naca4) else parse_naca(naca)
-    camber = foil.m / 100.0
-    position = foil.p / 10.0
-    alpha = math.radians(float(alpha_deg))
-    points = 81
-    dtheta = math.pi / (points - 1)
 
-    def slope(theta: float) -> float:
-        if camber == 0.0 or position == 0.0:
-            return 0.0
-        x = (1.0 - math.cos(theta)) / 2.0
-        if x < position:
-            return (2.0 * camber / (position * position)) * (position - x)
-        return (2.0 * camber / ((1.0 - position) ** 2)) * (position - x)
-
-    samples = [slope(i * dtheta) for i in range(points)]
-    weights = [0.5 if i in (0, points - 1) else 1.0 for i in range(points)]
-    integral_dz = dtheta * sum(w * s for w, s in zip(weights, samples))
-    integral_cos = dtheta * sum(
-        w * s * math.cos(i * dtheta) for i, (w, s) in enumerate(zip(weights, samples))
-    )
-    a0 = alpha - (1.0 / math.pi) * integral_dz
-    a1 = (2.0 / math.pi) * integral_cos
-    return 2.0 * math.pi * (a0 + a1 / 2.0)
+def first_cell_height(length: float, cells: int, ratio: float) -> float:
+    """First-cell height for a one-sided geometric grading over `length`."""
+    if cells < 1 or length <= 0 or ratio <= 0:
+        raise ValueError("bad grading inputs")
+    if cells == 1:
+        return float(length)
+    growth = float(ratio) ** (1.0 / (cells - 1))
+    return float(length) * (growth - 1.0) / (growth**cells - 1.0)
 
 
 def _log_text(ev: Mapping[str, object]) -> str:
@@ -302,6 +298,8 @@ def _log_text(ev: Mapping[str, object]) -> str:
 
 
 def judge_mesh(ev: Mapping[str, object], expected_cells: int | None = None) -> bool:
+    if ev.get("failure") in ("wall_clock", "fatal"):
+        return False
     if ev.get("fatal") or ev.get("exit_code", 0) not in (0, None):
         return False
     text = _log_text(ev)
@@ -339,12 +337,20 @@ def judge_solve(ev: Mapping[str, object]) -> bool:
         return False
     if "finished" in ev and not ev["finished"]:
         return False
-    try:
-        continuity = float(ev["continuity_cum"])  # type: ignore[arg-type]
-    except (KeyError, TypeError, ValueError):
-        return False
-    if continuity > Bounds.continuity_cum:
-        return False
+    local = ev.get("continuity_local")
+    if local is not None:
+        try:
+            if float(local) > Bounds.continuity_local:  # type: ignore[arg-type]
+                return False
+        except (TypeError, ValueError):
+            return False
+    else:
+        try:
+            continuity = float(ev["continuity_cum"])  # type: ignore[arg-type]
+        except (KeyError, TypeError, ValueError):
+            return False
+        if continuity > Bounds.continuity_cum:
+            return False
     elapsed = ev.get("elapsed_s")
     if elapsed is not None and float(elapsed) >= Bounds.solve_timeout_s:
         return False
@@ -383,10 +389,118 @@ def judge_pilot(ev: Mapping[str, object]) -> bool:
     )
 
 
-def judge_thin(cl: float, naca: Naca4 | str | dict, alpha_deg: float) -> bool:
-    predicted = thin_cl(naca, alpha_deg)
-    tolerance = max(Bounds.thin_abs, Bounds.thin_rel * abs(predicted))
-    return abs(float(cl) - predicted) <= tolerance
+def physics_check(
+    cl: float,
+    naca: Naca4 | str | dict,
+    alpha_deg: float,
+    u_ms: float = 10.0,
+    chord_m: float = 1.0,
+) -> tuple[bool, dict[str, object], str]:
+    """Check one measured Cl against the NeuralFoil polar.
+
+    Returns (ok, evidence, reason). This is the only lift model for the
+    supported Reynolds range. A missing reference, an out-of-range Reynolds
+    number, a low-confidence analysis, or a lift outside tolerance fails closed.
+    Drag is reported and checked by the refinement delta, not by this band.
+    Reference Cd is recorded and is not a pass or fail. y+ is not part of this check.
+    """
+    try:
+        measured = float(cl)
+        speed = float(u_ms)
+        chord = float(chord_m)
+    except (TypeError, ValueError):
+        evidence = {"passes": False, "model": "NeuralFoil", "error": "bad numeric input"}
+        return False, evidence, "reference polar: bad numeric input"
+
+    reynolds = speed * chord / float(Bounds.nu)
+    base: dict[str, object] = {
+        "model": "NeuralFoil",
+        "reynolds": reynolds,
+        "measured_cl": measured if math.isfinite(measured) else None,
+        "passes": False,
+    }
+    if not math.isfinite(measured):
+        return False, base, "reference polar: measured Cl is not finite"
+    if not (Bounds.reynolds_min <= reynolds <= Bounds.reynolds_max):
+        reason = (
+            f"Reynolds number {reynolds:.0f} is outside the validated "
+            f"range {Bounds.reynolds_min:.0f}..{Bounds.reynolds_max:.0f}"
+        )
+        base["error"] = reason
+        return False, base, reason
+
+    try:
+        reference = reference_polar(parse_naca(naca).code(), float(alpha_deg), reynolds)
+    except (ReferenceError, ValueError) as exc:
+        reason = f"reference polar unavailable: {exc}"
+        base["error"] = reason
+        return False, base, reason
+
+    if reference.confidence < Bounds.reference_min_confidence:
+        reason = (
+            f"{reference.model} confidence {reference.confidence:.3f} is below "
+            f"{Bounds.reference_min_confidence:.2f}"
+        )
+        evidence = {
+            "model": reference.model,
+            "source": reference.source,
+            "reynolds": reynolds,
+            "reference_cl": reference.cl,
+            "reference_cd": reference.cd,
+            "reference_cm": reference.cm,
+            "confidence": reference.confidence,
+            "measured_cl": measured,
+            "passes": False,
+            "error": reason,
+        }
+        return False, evidence, reason
+
+    tolerance = max(
+        float(Bounds.reference_abs),
+        float(Bounds.reference_rel) * abs(reference.cl),
+    )
+    difference = measured - reference.cl
+    passes = abs(difference) <= tolerance
+    evidence = {
+        "model": reference.model,
+        "source": reference.source,
+        "reynolds": reynolds,
+        "reference_cl": reference.cl,
+        "reference_cd": reference.cd,
+        "reference_cm": reference.cm,
+        "confidence": reference.confidence,
+        "measured_cl": measured,
+        "difference": difference,
+        "tolerance": tolerance,
+        "passes": passes,
+    }
+    reason = (
+        f"{reference.model} reference: measured Cl {measured:.4f}; "
+        f"reference Cl {reference.cl:.4f}; difference {difference:+.4f}; "
+        f"tolerance {tolerance:.4f}; Re {reynolds:.0f}; "
+        f"confidence {reference.confidence:.3f}"
+    )
+    return passes, evidence, reason
+
+
+def judge_physics(
+    cl: float,
+    naca: Naca4 | str | dict,
+    alpha_deg: float,
+    u_ms: float = 10.0,
+    chord_m: float = 1.0,
+) -> bool:
+    return physics_check(cl, naca, alpha_deg, u_ms, chord_m)[0]
+
+
+def _physics_reason(
+    cl: float,
+    naca: Naca4 | str | dict,
+    alpha_deg: float,
+    u_ms: float = 10.0,
+    chord_m: float = 1.0,
+) -> str:
+    return physics_check(cl, naca, alpha_deg, u_ms, chord_m)[2]
 
 
 def judge_delta(delta_cl: float, delta_cd: float) -> bool:
@@ -444,6 +558,35 @@ def _scope_ok(ev: Mapping[str, object]) -> bool:
     if not (Bounds.alpha_min <= alpha <= Bounds.alpha_max):
         return False
     if not (Bounds.u_min <= speed <= Bounds.u_max):
+        return False
+    if "chord_m" in ev and ev["chord_m"] is not None:
+        try:
+            chord = float(ev["chord_m"])  # type: ignore[arg-type]
+            if not (Bounds.chord_min <= chord <= Bounds.chord_max):
+                return False
+        except (TypeError, ValueError):
+            return False
+    if "span_m" in ev and ev["span_m"] is not None:
+        try:
+            span = float(ev["span_m"])  # type: ignore[arg-type]
+            if not (Bounds.span_min <= span <= Bounds.span_max):
+                return False
+        except (TypeError, ValueError):
+            return False
+    try:
+        chord = float(ev["chord_m"]) if ev.get("chord_m") is not None else float(Bounds.chord_m)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    reynolds = speed * chord / float(Bounds.nu)
+    if not (Bounds.reynolds_min <= reynolds <= Bounds.reynolds_max):
+        return False
+    if "nu" in ev and ev["nu"] is not None:
+        try:
+            if abs(float(ev["nu"]) - float(Bounds.nu)) > 1e-12:  # type: ignore[arg-type]
+                return False
+        except (TypeError, ValueError):
+            return False
+    if "turbulence_model" in ev and ev["turbulence_model"] not in (None, "SpalartAllmaras"):
         return False
     return ev.get("density") in ("coarse", "refined")
 
@@ -708,6 +851,17 @@ def _goal_text(scope: dict | None) -> str:
     )
 
 
+def _physics_scope_reason(cl: float, scope: dict) -> str:
+    """Why the reference gate refused. The view still has no coefficient field."""
+    return _physics_reason(
+        cl,
+        scope["naca"],
+        float(scope["alpha_deg"]),
+        float(scope.get("u_ms", 10.0)),
+        float(scope.get("chord_m", 1.0)),
+    )
+
+
 def _refuse(gate: str, log: str, reason: str, panels: tuple[Panel, ...]) -> Refusal:
     return Refusal(gate=gate, log=log, reason=reason, panels=panels)
 
@@ -772,11 +926,20 @@ def _screening_panels(receipts: list[dict], cl: float, cd: float) -> tuple[Panel
     )
 
 
-def _flight_key(scope: dict) -> tuple[str, float, float]:
+def _flight_length(scope: dict, key: str, default: float) -> float:
+    """Round so a missing length and the same JSON default still match."""
+    raw = scope.get(key)
+    value = default if raw is None else float(raw)
+    return round(value, 9)
+
+
+def _flight_key(scope: dict) -> tuple[str, float, float, float, float]:
     return (
         parse_naca(scope["naca"]).code(),
         float(scope["alpha_deg"]),
         float(scope["u_ms"]),
+        _flight_length(scope, "chord_m", Bounds.chord_m),
+        _flight_length(scope, "span_m", Bounds.z_thickness),
     )
 
 
@@ -797,14 +960,20 @@ def _project_run(receipts: list[dict], outer: dict | None) -> Screening | Refusa
         return _refuse("incomplete", "", "no outer verdict", _other_panels(scope, "incomplete"))
     cl = float(forces["cl"])
     cd = float(forces["cd"])
-    thin_name = str(outer.get("thin", "")).strip().lower()
-    thin_ok = thin_name == "green" and judge_thin(cl, scope["naca"], float(scope["alpha_deg"]))
-    if not thin_ok:
+    physics_name = str(outer.get("physics", "")).strip().lower()
+    physics_ok = physics_name == "green" and judge_physics(
+        cl,
+        scope["naca"],
+        float(scope["alpha_deg"]),
+        float(scope.get("u_ms", 10.0)),
+        float(scope.get("chord_m", 1.0)),
+    )
+    if not physics_ok:
         return _refuse(
-            "thin_airfoil",
+            "physics",
             str(forces.get("log") or ""),
-            "thin airfoil",
-            _panels_through_solve(receipts) + (Panel("refused", "thin_airfoil"),),
+            _physics_scope_reason(cl, scope),
+            _panels_through_solve(receipts) + (Panel("refused", "physics"),),
         )
     review = str(outer.get("review", "")).strip().lower()
     if review not in ("affirm", "challenge"):
@@ -880,7 +1049,12 @@ def project(
     if child_scope.get("density") != "refined":
         return _refuse("refinement", "", "child density is not refined", _other_panels(child_scope, "refinement"))
     if _flight_key(parent_scope) != _flight_key(child_scope):
-        return _refuse("refinement", "", "naca, alpha, or U differ", _other_panels(child_scope, "refinement"))
+        return _refuse(
+            "refinement",
+            "",
+            "naca, alpha, U, chord, or span differ",
+            _other_panels(child_scope, "refinement"),
+        )
     delta_cl = float(child_forces["cl"]) - float(parent_forces["cl"])
     delta_cd = float(child_forces["cd"]) - float(parent_forces["cd"])
     if not judge_delta(delta_cl, delta_cd):
@@ -891,13 +1065,20 @@ def project(
             _other_panels(child_scope, "refinement"),
         )
     child_cl = float(child_forces["cl"])
-    thin_name = str(child_outer.get("thin", "")).strip().lower()
-    if thin_name != "green" or not judge_thin(child_cl, child_scope["naca"], float(child_scope["alpha_deg"])):
+    physics_name = str(child_outer.get("physics", "")).strip().lower()
+    physics_ok = physics_name == "green" and judge_physics(
+        child_cl,
+        child_scope["naca"],
+        float(child_scope["alpha_deg"]),
+        float(child_scope.get("u_ms", 10.0)),
+        float(child_scope.get("chord_m", 1.0)),
+    )
+    if not physics_ok:
         return _refuse(
-            "thin_airfoil",
+            "physics",
             str(child_forces.get("log") or ""),
-            "thin airfoil",
-            _other_panels(child_scope, "thin_airfoil"),
+            _physics_scope_reason(child_cl, child_scope),
+            _other_panels(child_scope, "physics"),
         )
     if str(child_outer.get("review", "")).strip().lower() != "affirm":
         return _refuse(
@@ -950,6 +1131,8 @@ def _bounds_comment() -> str:
             f"# rho {Bounds.rho}",
             f"# aref {Bounds.aref}",
             f"# chord_m {Bounds.chord_m}",
+            f"# chord [{Bounds.chord_min}, {Bounds.chord_max}]",
+            f"# span [{Bounds.span_min}, {Bounds.span_max}]",
             f"# alpha [{Bounds.alpha_min}, {Bounds.alpha_max}]",
             f"# U [{Bounds.u_min}, {Bounds.u_max}] default {Bounds.u_default}",
             f"# thickness [{Bounds.t_min}, {Bounds.t_max}]",
@@ -961,14 +1144,18 @@ def _bounds_comment() -> str:
             f"# max_agent_turns {Bounds.max_agent_turns}",
             f"# max_non_ortho {Bounds.max_non_ortho}",
             f"# max_skew {Bounds.max_skew}",
+            f"# continuity_local {Bounds.continuity_local}",
             f"# continuity_cum {Bounds.continuity_cum}",
+            f"# reynolds [{Bounds.reynolds_min}, {Bounds.reynolds_max}]",
+            f"# reference_abs {Bounds.reference_abs}",
+            f"# reference_rel {Bounds.reference_rel}",
+            f"# reference_min_confidence {Bounds.reference_min_confidence}",
+            f"# wall_grading_scale {Bounds.wall_grading_scale}",
             f"# cylinder_cells {Bounds.cylinder_cells}",
             f"# cylinder_continuity {Bounds.cylinder_continuity}",
             f"# cylinder_velocity {Bounds.cylinder_velocity}",
             f"# delta_cl {Bounds.delta_cl}",
             f"# delta_cd {Bounds.delta_cd}",
-            f"# thin_abs {Bounds.thin_abs}",
-            f"# thin_rel {Bounds.thin_rel}",
             f"# timeouts mesh {Bounds.mesh_timeout_s} solve {Bounds.solve_timeout_s} pilot {Bounds.pilot_timeout_s}",
             f"# cell_counts {' '.join(str(count) for count in counts)}",
             f"# streams {' '.join(str(item) for item in STREAMS)}",
@@ -1015,6 +1202,11 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:alpha_deg ] ;
   sh:property [ sh:path wl:u_ms ] ;
   sh:property [ sh:path wl:density ] ;
+  sh:property [ sh:path wl:chord_m ] ;
+  sh:property [ sh:path wl:span_m ] ;
+  sh:property [ sh:path wl:camber ] ;
+  sh:property [ sh:path wl:camber_pos ] ;
+  sh:property [ sh:path wl:thickness ] ;
   sh:property [ sh:path wl:pilot_id ] ;
   sh:property [ sh:path wl:stream ] ;
   sh:property [ sh:path wl:grading ] ;
@@ -1025,6 +1217,19 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:u_relax ] ;
   sh:property [ sh:path wl:non_ortho ] ;
   sh:property [ sh:path wl:continuity_cum ] ;
+  sh:property [ sh:path wl:continuity_local ] ;
+  sh:property [ sh:path wl:continuity_global ] ;
+  sh:property [ sh:path wl:n_normal ] ;
+  sh:property [ sh:path wl:wall_grading ] ;
+  sh:property [ sh:path wl:first_cell_m ] ;
+  sh:property [ sh:path wl:nu ] ;
+  sh:property [ sh:path wl:reynolds ] ;
+  sh:property [ sh:path wl:turbulence_model ] ;
+  sh:property [ sh:path wl:reference_model ] ;
+  sh:property [ sh:path wl:end_time ] ;
+  sh:property [ sh:path wl:yplus_min ] ;
+  sh:property [ sh:path wl:yplus_max ] ;
+  sh:property [ sh:path wl:yplus_avg ] ;
   sh:property [ sh:path wl:failure ] ;
   sh:property [ sh:path wl:cl ] ;
   sh:property [ sh:path wl:cd ] ;
@@ -1156,11 +1361,11 @@ def taintedOf : Status → Bool
   | .red => true
   | .stopped => true
 
-/-- Report label. Design is one row: untainted forces-green, thin green,
+/-- Report label. Design is one row: untainted forces-green, physics green,
     review affirm, refinement green, and delta inside the emitted bound. -/
-def label (shape : Shape) (tainted thinGreen : Bool) (review : Review)
+def label (shape : Shape) (tainted physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool) : Label :=
-  match tainted, shape, thinGreen, review, refine, inside with
+  match tainted, shape, physicsGreen, review, refine, inside with
   | false, .forces_green, true, .affirm, .green, true => .design
   | false, .forces_green, true, _, _, _ => .screening
   | _, _, _, _, _, _ => .refusal
@@ -1172,28 +1377,28 @@ theorem delta_inside_bound_endpoints :
   decide
 
 theorem report_unreachable_after_failure
-    (shape : Shape) (prior : Status) (thinGreen : Bool) (review : Review)
+    (shape : Shape) (prior : Status) (physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool)
     (h : prior = .red ∨ prior = .stopped) :
-    label shape (taintedOf prior) thinGreen review refine inside ≠ .screening ∧
-    label shape (taintedOf prior) thinGreen review refine inside ≠ .design := by
-  cases h <;> cases prior <;> cases shape <;> cases thinGreen <;> cases review <;>
+    label shape (taintedOf prior) physicsGreen review refine inside ≠ .screening ∧
+    label shape (taintedOf prior) physicsGreen review refine inside ≠ .design := by
+  cases h <;> cases prior <;> cases shape <;> cases physicsGreen <;> cases review <;>
     cases refine <;> cases inside <;> simp [label, taintedOf] at *
 
 theorem design_needs_refinement
-    (shape : Shape) (tainted thinGreen : Bool) (review : Review)
+    (shape : Shape) (tainted physicsGreen : Bool) (review : Review)
     (refine : Refine) (inside : Bool)
-    (h : label shape tainted thinGreen review refine inside = .design) :
+    (h : label shape tainted physicsGreen review refine inside = .design) :
     refine = .green ∧ inside = true ∧ review = .affirm := by
-  cases tainted <;> cases shape <;> cases thinGreen <;> cases review <;>
+  cases tainted <;> cases shape <;> cases physicsGreen <;> cases review <;>
     cases refine <;> cases inside <;> simp [label] at h
   all_goals try cases h
   exact ⟨rfl, rfl, rfl⟩
 
 theorem review_cannot_mint_design
-    (shape : Shape) (tainted thinGreen : Bool) (refine : Refine) (inside : Bool) :
-    label shape tainted thinGreen .challenge refine inside ≠ .design := by
-  cases shape <;> cases tainted <;> cases thinGreen <;> cases refine <;> cases inside <;>
+    (shape : Shape) (tainted physicsGreen : Bool) (refine : Refine) (inside : Bool) :
+    label shape tainted physicsGreen .challenge refine inside ≠ .design := by
+  cases shape <;> cases tainted <;> cases physicsGreen <;> cases refine <;> cases inside <;>
     simp [label]
   all_goals (intro contra; cases contra)
 

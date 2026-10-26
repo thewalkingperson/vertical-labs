@@ -1,4 +1,4 @@
 {
-  "u_relax": 0.7,
-  "non_ortho": 0
+  "u_relax": 0.5,
+  "non_ortho": 1
 }

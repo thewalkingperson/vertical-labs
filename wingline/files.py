@@ -6,6 +6,8 @@ import json
 import re
 from pathlib import Path
 
+from wingline.kernel import DesignGrade, Screening, parse_naca, project
+
 _NUM = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
 
 _PREFERRED = (
@@ -25,6 +27,7 @@ _PREFERRED = (
     "case/log.simpleFoam",
     "case/log.forceCoeffs",
     "case/postProcessing/forceCoeffs/0/coefficient.dat",
+    "diagnosis.txt",
     "outer/verdict.json",
     "outer/search.json",
 )
@@ -65,6 +68,8 @@ def _kind(rel: str) -> str:
         return "ledger"
     if name == "steer.jsonl":
         return "steer"
+    if name == "diagnosis.txt":
+        return "diagnosis"
     return "file"
 
 
@@ -184,10 +189,19 @@ def highlights(rel: str, text: str) -> list[dict]:
             chips.append(_chip("Skew", f"{float(skew.group(1)):.2f}"))
         return chips
     if rel.endswith("log.simpleFoam"):
-        cumulatives = re.findall(rf"cumulative\s*=\s*({_NUM})", text, re.IGNORECASE)
-        if cumulatives:
-            chips.append(_chip("Continuity", f"{float(cumulatives[-1]):.4g}"))
+        locals_ = re.findall(rf"sum local\s*=\s*({_NUM})", text, re.IGNORECASE)
+        if locals_:
+            chips.append(_chip("Continuity", f"{float(locals_[-1]):.4g}"))
+        else:
+            cumulatives = re.findall(rf"cumulative\s*=\s*({_NUM})", text, re.IGNORECASE)
+            if cumulatives:
+                chips.append(_chip("Continuity", f"{float(cumulatives[-1]):.4g}"))
         chips.append(_chip("Finished", "yes" if "ExecutionTime" in text else "no"))
+        return chips
+    if rel.endswith("turbulenceProperties"):
+        match = re.search(r"RASModel\s+(\w+)", text)
+        if match:
+            chips.append(_chip("Turbulence", match.group(1)))
         return chips
     if rel.endswith("coefficient.dat"):
         cl, cd = _last_coefficients(text)
@@ -201,7 +215,7 @@ def highlights(rel: str, text: str) -> list[dict]:
             verdict = json.loads(text)
         except json.JSONDecodeError:
             return chips
-        for key in ("gate", "thin", "review"):
+        for key in ("gate", "physics", "review"):
             if verdict.get(key):
                 chips.append(_chip(key.capitalize(), verdict[key]))
         return chips
@@ -212,6 +226,9 @@ def highlights(rel: str, text: str) -> list[dict]:
             return chips
         if search.get("objective"):
             chips.append(_chip("Objective", search["objective"]))
+        rows = search.get("rows")
+        if isinstance(rows, list) and len(rows) > 1:
+            chips.append(_chip("Probes", str(len(rows) - 1)))
         if search.get("best_naca"):
             chips.append(_chip("Neighbor", f"{search['best_naca']} at {search.get('best_alpha_deg')}°"))
         return chips
@@ -261,7 +278,51 @@ def _load(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def summarize_run(run_dir: Path, active: str | None = None) -> dict:
+def _worth_finer(run_dir: Path) -> bool:
+    """True only when project itself commissions a finer run. A child run is not asked again."""
+    if (run_dir / "parent").is_file():
+        return False
+    ledger = run_dir / "ledger"
+    if not ledger.is_dir():
+        return False
+    verdict = run_dir / "outer" / "verdict.json"
+    try:
+        view = project(ledger, None, verdict if verdict.is_file() else None)
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return False
+    return isinstance(view, Screening) and view.worth_finer
+
+
+def _design_delta(parent: Path, child: Path) -> dict | None:
+    if not (parent / "ledger").is_dir() or not (child / "ledger").is_dir():
+        return None
+    parent_verdict = parent / "outer" / "verdict.json"
+    child_verdict = child / "outer" / "verdict.json"
+    try:
+        view = project(
+            parent / "ledger",
+            child / "ledger",
+            (
+                parent_verdict if parent_verdict.is_file() else None,
+                child_verdict if child_verdict.is_file() else None,
+            ),
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(view, DesignGrade):
+        return None
+    return {
+        "child_id": child.name,
+        "parent_id": parent.name,
+        "cl": view.cl,
+        "cd": view.cd,
+        "delta_cl": view.delta_cl,
+        "delta_cd": view.delta_cd,
+        "sentence": view.sentence,
+    }
+
+
+def summarize_run(run_dir: Path, active: str | None = None, children: list[Path] | None = None) -> dict:
     run_dir = Path(run_dir)
     spec = _load(run_dir / "spec.json") or {}
     verdict = _load(run_dir / "outer" / "verdict.json") or {}
@@ -275,12 +336,17 @@ def summarize_run(run_dir: Path, active: str | None = None) -> dict:
     gate = ""
     if verdict.get("gate"):
         gate = str(verdict["gate"])
-    elif verdict.get("thin") == "red":
-        gate = "thin_airfoil"
-    elif verdict.get("thin") == "green":
+    elif verdict.get("physics") == "red":
+        gate = "physics"
+    elif verdict.get("physics") == "green":
         gate = "screening"
     elif run_dir.name == active:
         gate = "running"
+    delta = None
+    for child in children or []:
+        delta = _design_delta(run_dir, child)
+        if delta is not None:
+            break
     return {
         "id": run_dir.name,
         "naca": spec.get("naca", ""),
@@ -290,14 +356,92 @@ def summarize_run(run_dir: Path, active: str | None = None) -> dict:
         "gate": gate,
         "cl": cl,
         "cd": cd,
+        "worth_finer": _worth_finer(run_dir),
+        "delta": delta,
+        "has_board": (run_dir / "outer" / "search.json").is_file(),
         "active": run_dir.name == active,
     }
 
 
+def _pointer(path: Path, name: str) -> str:
+    file = path / name
+    if not file.is_file():
+        return ""
+    try:
+        text = file.read_text().strip()
+    except OSError:
+        return ""
+    if not text.startswith("run-") or text != Path(text).name:
+        return ""
+    return text
+
+
+def _born(path: Path) -> float:
+    stat = path.stat()
+    return float(getattr(stat, "st_birthtime", stat.st_mtime))
+
+
+def _out_in(origin: Path, other: Path) -> tuple[float, float, float]:
+    """Farther neighborhood steps first. The same step keeps the earlier run."""
+    left = _load(origin / "spec.json") or {}
+    right = _load(other / "spec.json") or {}
+    try:
+        asked = parse_naca(str(left.get("naca") or ""))
+        neighbor = parse_naca(str(right.get("naca") or ""))
+        section = float(abs(asked.m - neighbor.m) + abs(asked.p - neighbor.p) + abs(asked.t - neighbor.t))
+    except (TypeError, ValueError):
+        section = 0.0
+    try:
+        angle = abs(float(left.get("alpha_deg")) - float(right.get("alpha_deg")))
+    except (TypeError, ValueError):
+        angle = 0.0
+    return (-section, -angle, _born(other))
+
+
 def list_runs(store: Path, active: str | None = None) -> list[dict]:
+    """Newest asked wing first. Its finer mesh follows, then neighborhood runs, outer step first."""
     store = Path(store)
     if not store.is_dir():
         return []
     paths = [path for path in store.iterdir() if path.is_dir() and path.name.startswith("run-")]
-    paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    return [summarize_run(path, active) for path in paths]
+    names = {path.name for path in paths}
+    refine: dict[str, list[Path]] = {}
+    explored: dict[str, list[Path]] = {}
+    anchors: list[Path] = []
+    for path in paths:
+        parent = _pointer(path, "parent")
+        origin = _pointer(path, "origin")
+        if parent and parent in names and parent != path.name:
+            refine.setdefault(parent, []).append(path)
+            continue
+        if origin and origin in names and origin != path.name:
+            explored.setdefault(origin, []).append(path)
+            continue
+        anchors.append(path)
+    anchors.sort(key=_born, reverse=True)
+    ordered: list[Path] = []
+    placed: set[str] = set()
+
+    def place(path: Path) -> None:
+        if path.name in placed:
+            return
+        ordered.append(path)
+        placed.add(path.name)
+
+    for anchor in anchors:
+        place(anchor)
+        for child in sorted(refine.get(anchor.name, []), key=_born):
+            place(child)
+        neighbors = sorted(explored.get(anchor.name, []), key=lambda item: _out_in(anchor, item))
+        for neighbor in neighbors:
+            place(neighbor)
+            for child in sorted(refine.get(neighbor.name, []), key=_born):
+                place(child)
+    leftovers = [path for path in paths if path.name not in placed]
+    leftovers.sort(key=_born, reverse=True)
+    for path in leftovers:
+        place(path)
+    return [
+        summarize_run(path, active, sorted(refine.get(path.name, []), key=_born, reverse=True))
+        for path in ordered
+    ]

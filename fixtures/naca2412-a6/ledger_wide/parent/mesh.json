@@ -9,11 +9,14 @@
   "log": "log.checkMesh",
   "writer": "case-writer",
   "written_at": "2026-10-23T00:00:00Z",
-  "stream": 60,
+  "stream": 100,
   "grading": 8,
-  "cells": 9600,
-  "cells_expected": 9600,
-  "max_non_ortho": 48.0,
-  "max_skew": 1.1,
-  "signature": "sha256:mesh-green"
+  "cells": 64000,
+  "cells_expected": 64000,
+  "max_non_ortho": 63.49854,
+  "max_skew": 1.4422178,
+  "signature": "sha256:mesh-green",
+  "n_normal": 160,
+  "wall_grading": 1000,
+  "first_cell_m": 0.000340444269
 }

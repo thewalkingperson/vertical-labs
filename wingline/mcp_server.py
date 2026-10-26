@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import shutil
+import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,9 @@ from wingline.case_writer import (
     parse_cylinder,
     parse_force_coeffs,
     parse_simple_foam,
+    yplus_from_case,
     render,
+    open_parafoam,
     run_block_mesh,
     run_foam,
 )
@@ -59,13 +62,18 @@ _TERMINAL = {
     "forces_red",
 }
 
+def show_case(case: Path) -> subprocess.Popen:
+    """The workbench asks here. The launcher string stays in the case writer."""
+    return open_parafoam(case)
+
+
 mcp = FastMCP(
     "wingline",
     instructions="Pass the lease unchanged. Mesh and solve arguments are enums.",
     log_level="ERROR",
 )
 
-Stream = Literal[60, 80]
+Stream = Literal[60, 80, 100]
 Grading = Literal[2, 4, 8, 12]
 Relax = Literal[0.7, 0.5, 0.3]
 Ortho = Literal[0, 1, 2]
@@ -90,12 +98,20 @@ def _num(value: object) -> int | float:
 
 
 def canonical_spec(spec: Mapping[str, object]) -> dict:
-    return {
+    canonical = {
         "naca": str(spec["naca"]),
         "alpha_deg": _num(spec["alpha_deg"]),
         "u_ms": _num(spec["u_ms"]),
         "density": str(spec["density"]),
     }
+    if "chord_m" in spec and spec["chord_m"] is not None:
+        canonical["chord_m"] = _num(spec["chord_m"])
+    if "span_m" in spec and spec["span_m"] is not None:
+        canonical["span_m"] = _num(spec["span_m"])
+    for key in ("camber", "camber_pos", "thickness"):
+        if key in spec and spec[key] is not None:
+            canonical[key] = _num(spec[key])
+    return canonical
 
 
 def spec_hash(spec: Mapping[str, object]) -> str:
@@ -393,6 +409,10 @@ def observe(run_id: str) -> dict:
                 break
     mesh_reds = len(_mesh_reds(receipts))
     solve_reds = len(_solve_reds(receipts))
+    try:
+        density = str(_load_spec(run_dir).get("density") or "coarse")
+    except (OSError, ValueError, KeyError):
+        density = "coarse"
     open_stage = {
         "pilot_green": "scope",
         "scoped": "mesh",
@@ -406,6 +426,7 @@ def observe(run_id: str) -> dict:
         "shape": current,
         "terminal": current in _TERMINAL,
         "open_stage": open_stage,
+        "density": density,
         "mesh_reds": mesh_reds,
         "solve_reds": solve_reds,
         "mesh_remaining": max(0, Bounds.mesh_budget - mesh_reds),
@@ -425,7 +446,7 @@ def commit_spec(run_id: str, lease: str) -> dict:
     if not _lease_ok(run_dir, lease):
         return _denied(run_id)
     spec = _load_spec(run_dir)
-    render(spec, {"stream": 60, "grading": 8}, {"u_relax": 0.7, "non_ortho": 0})
+    render(spec, {"stream": 100, "grading": 8}, {"u_relax": 0.5, "non_ortho": 1})
     receipts = _ledger(run_dir)
     pilot = next((item for item in receipts if item.get("stage") == "pilot"), None)
     if pilot is None:
@@ -438,6 +459,18 @@ def commit_spec(run_id: str, lease: str) -> dict:
         "density": spec["density"],
         "pilot_id": pilot.get("id"),
     }
+    if "chord_m" in spec and spec["chord_m"] is not None:
+        evidence["chord_m"] = spec["chord_m"]
+    if "span_m" in spec and spec["span_m"] is not None:
+        evidence["span_m"] = spec["span_m"]
+    for key in ("camber", "camber_pos", "thickness"):
+        if key in spec and spec[key] is not None:
+            evidence[key] = spec[key]
+    chord = float(spec.get("chord_m", Bounds.chord_m))
+    evidence["nu"] = Bounds.nu
+    evidence["reynolds"] = float(spec["u_ms"]) * chord / Bounds.nu
+    evidence["turbulence_model"] = "SpalartAllmaras"
+    evidence["reference_model"] = "NeuralFoil"
     commit = Commit(
         run_id=run_id,
         stage="scope",
@@ -490,7 +523,7 @@ def commit_mesh(run_id: str, lease: str, stream: Stream, grading: Grading) -> di
         return _finish(run_dir, "commit_mesh", result)
     started = time.monotonic()
     mesh_plan = {"stream": stream_i, "grading": grading_i}
-    solve_plan = {"u_relax": 0.7, "non_ortho": 0}
+    solve_plan = {"u_relax": 0.5, "non_ortho": 1}
     try:
         ran = run_block_mesh(run_dir / "case", spec, mesh_plan, solve_plan)
     except OSError as exc:
@@ -499,12 +532,15 @@ def commit_mesh(run_id: str, lease: str, stream: Stream, grading: Grading) -> di
     elapsed = time.monotonic() - started
     block_text = _read(Path(ran["block_log"]))
     check_text = _read(Path(ran["check_log"]))
+    raw_chord = spec.get("chord_m", Bounds.chord_m)
+    chord_m = float(Bounds.chord_m if raw_chord is None else raw_chord)
     evidence = mesh_evidence(
         block_text,
         check_text,
         cells_expected=cell_count(stream_i, spec["density"]),
         stream=stream_i,
         grading=grading_i,
+        chord_m=chord_m,
     )
     evidence["exit_code"] = ran["exit_code"]
     evidence["elapsed_s"] = elapsed
@@ -613,8 +649,17 @@ def commit_solve(run_id: str, lease: str, u_relax: Relax, non_ortho: Ortho) -> d
         "log": "log.simpleFoam",
         "log_text": text,
     }
-    if parsed["continuity_cum"] is not None:
-        evidence["continuity_cum"] = parsed["continuity_cum"]
+    for key in ("continuity_local", "continuity_global", "continuity_cum"):
+        if parsed.get(key) is not None:
+            evidence[key] = parsed[key]
+    evidence["end_time"] = Bounds.end_time
+    evidence["turbulence_model"] = "SpalartAllmaras"
+    evidence["nu"] = Bounds.nu
+    measured_yplus = yplus_from_case(case)
+    if measured_yplus is not None:
+        evidence["yplus_min"] = measured_yplus["min"]
+        evidence["yplus_max"] = measured_yplus["max"]
+        evidence["yplus_avg"] = measured_yplus["avg"]
     commit = Commit(
         run_id=run_id,
         stage="solve",

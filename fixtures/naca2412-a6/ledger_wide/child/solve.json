@@ -9,8 +9,13 @@
   "log": "log.simpleFoam",
   "writer": "case-writer",
   "written_at": "2026-10-23T00:00:00Z",
-  "u_relax": 0.7,
-  "non_ortho": 0,
+  "u_relax": 0.5,
+  "non_ortho": 1,
   "continuity_cum": 0.0001,
-  "failure": "none"
+  "failure": "none",
+  "continuity_local": 1e-06,
+  "continuity_global": 5e-07,
+  "end_time": 600,
+  "turbulence_model": "SpalartAllmaras",
+  "nu": 1.5e-05
 }

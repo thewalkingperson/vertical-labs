@@ -9,6 +9,6 @@
   "log": "postProcessing/forceCoeffs/0/coefficient.dat",
   "writer": "case-writer",
   "written_at": "2026-10-23T00:00:00Z",
-  "cl": 0.89,
-  "cd": 0.018
+  "cl": 0.855949564,
+  "cd": 0.0280312507
 }

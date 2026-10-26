@@ -1,12 +1,14 @@
 """Offline projection of the NACA 2412 fixture ledgers."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
 from pyshacl import validate
 
 from wingline import DesignGrade, HardwareDecision, Refusal, Screening, hardware_decision
+from wingline.__main__ import panel_lines
 from wingline.kernel import (
     Bounds,
     Commit,
@@ -85,6 +87,8 @@ def test_mesh_red_refuses_without_a_screening_panel() -> None:
     assert not isinstance(view, Screening)
     assert all(panel.kind != "screening" for panel in view.panels)
     assert not hasattr(view, "cl")
+    assert "measured Cl" not in view.reason
+    assert "measured Cl" not in " ".join(panel_lines(view))
 
 
 def test_wide_delta_is_not_a_design_grade() -> None:
@@ -107,10 +111,10 @@ def test_design_ledger_is_a_design_grade() -> None:
     assert isinstance(decision, HardwareDecision)
 
 
-def test_thin_red_keeps_the_mesh_and_solve_prefix() -> None:
-    view = project(FIX / "ledger_green", None, {"thin": "red", "review": "challenge"})
+def test_physics_red_keeps_the_mesh_and_solve_prefix() -> None:
+    view = project(FIX / "ledger_green", None, {"physics": "red", "review": "challenge"})
     assert isinstance(view, Refusal)
-    assert view.gate == "thin_airfoil"
+    assert view.gate == "physics"
     assert [panel.kind for panel in view.panels] == [
         "goal",
         "meshing",
@@ -120,6 +124,28 @@ def test_thin_red_keeps_the_mesh_and_solve_prefix() -> None:
     ]
     assert all(panel.kind != "screening" for panel in view.panels)
     assert not hasattr(view, "cl")
+    assert "NeuralFoil reference" in view.reason
+    assert "measured Cl 0.8825" in view.reason
+    assert "reference Cl 0.8989" in view.reason
+    assert "Re 666667" in view.reason
+    shown = " ".join(panel_lines(view))
+    assert "measured Cl 0.8825" in shown
+    assert "Re 666667" in shown
+    assert "screening:" not in shown
+
+
+def test_child_physics_refusal_names_the_child_measurement() -> None:
+    outer = ({"physics": "green", "review": "affirm"}, {"physics": "red", "review": "affirm"})
+    view = project(FIX / "ledger_design" / "parent", FIX / "ledger_design" / "child", outer)
+    assert isinstance(view, Refusal)
+    assert view.gate == "physics"
+    assert not isinstance(view, DesignGrade)
+    assert not hasattr(view, "cl")
+    assert all(panel.kind != "screening" for panel in view.panels)
+    assert all(panel.kind != "design" for panel in view.panels)
+    assert "measured Cl 0.8559" in view.reason
+    assert "Re 666667" in view.reason
+    assert "measured Cl 0.8559" in " ".join(panel_lines(view))
 
 
 def test_missing_outer_is_incomplete() -> None:
@@ -134,6 +160,40 @@ def test_missing_outer_is_incomplete() -> None:
 def test_judge_delta_bounds() -> None:
     assert judge_delta(0.05, 0.01) is True
     assert judge_delta(0.051, 0.0) is False
+
+
+def _copied_design(tmp_path: Path) -> tuple[Path, Path]:
+    parent = tmp_path / "parent"
+    child = tmp_path / "child"
+    shutil.copytree(FIX / "ledger_design" / "parent", parent)
+    shutil.copytree(FIX / "ledger_design" / "child", child)
+    return parent, child
+
+
+def test_a_different_chord_refuses_refinement(tmp_path: Path) -> None:
+    parent, child = _copied_design(tmp_path)
+    scope_path = child / "scope.json"
+    scope = json.loads(scope_path.read_text())
+    scope["chord_m"] = 2.0
+    scope_path.write_text(json.dumps(scope) + "\n")
+    outer = (FIX / "outer_affirm.json", FIX / "outer_affirm.json")
+    view = project(parent, child, outer)
+    assert isinstance(view, Refusal)
+    assert view.gate == "refinement"
+    assert "chord" in view.reason
+    assert not isinstance(view, DesignGrade)
+
+
+def test_explicit_default_lengths_still_match(tmp_path: Path) -> None:
+    parent, child = _copied_design(tmp_path)
+    scope_path = child / "scope.json"
+    scope = json.loads(scope_path.read_text())
+    scope["chord_m"] = 1.0
+    scope["span_m"] = 0.1
+    scope_path.write_text(json.dumps(scope) + "\n")
+    outer = (FIX / "outer_affirm.json", FIX / "outer_affirm.json")
+    view = project(parent, child, outer)
+    assert isinstance(view, DesignGrade)
 
 
 def test_design_grade_rejects_wide_delta() -> None:

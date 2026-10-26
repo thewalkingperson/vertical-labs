@@ -1,1 +1,1 @@
-Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release.
+Design grade is force agreement between the parent mesh and a 20% chordwise refinement on this wall-modeled Spalart-Allmaras setup. It is not mesh independence and it is not a flight-hardware release.

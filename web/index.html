@@ -9,18 +9,37 @@
 <body>
   <header class="top">
     <div class="brand">
-      <span class="mark" aria-hidden="true">Wl</span>
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" width="18" height="18">
+          <path d="M3 19.5c7-1 12-5.5 16.5-11.5 1.2 4.2 3.4 7.2 9.5 9.2-6.2 1.2-10.4 3.4-14.2 8.2C11.2 22.4 7.2 20.6 3 19.5z"/>
+        </svg>
+      </span>
       <div>
+        <p class="eyebrow">Vertical Labs</p>
         <h1>Wingline</h1>
-        <p>Coarse wing studies</p>
       </div>
     </div>
-    <p id="status" class="status">Idle</p>
+    <div class="top-actions">
+      <label class="switch" for="explore-toggle">
+        <input id="explore-toggle" type="checkbox" role="switch" checked
+          title="On: solve up to 10 nearby wings with the tool client, store the cases, and leave the chat quiet.">
+        <span class="track" aria-hidden="true"></span>
+        <span class="switch-label">Constant exploration</span>
+      </label>
+      <p id="status" class="status" data-phase="idle">Idle</p>
+    </div>
   </header>
 
   <main class="workspace">
     <section class="talk" aria-label="Conversation">
       <div id="transcript" class="transcript"></div>
+      <div id="thinking" class="thinking" hidden role="status" aria-live="polite">
+        <span class="who">Meta</span>
+        <p>
+          <span class="label">Reading the request.</span>
+          <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+        </p>
+      </div>
       <form id="composer" class="composer">
         <label for="message">Message</label>
         <textarea id="message" rows="3" placeholder="Ask about a wing"></textarea>
@@ -36,7 +55,9 @@
 
     <section class="bench" aria-label="Runs and files">
       <div class="runs">
-        <h2>OpenFOAM runs</h2>
+        <div class="section-head">
+          <h2>Runs</h2>
+        </div>
         <div id="run-list" class="run-list"></div>
       </div>
       <div class="inspect">
@@ -46,11 +67,45 @@
         </div>
         <article class="viewer" aria-live="polite">
           <header class="viewer-head">
-            <h2 id="viewer-title">Select a file</h2>
+            <div>
+              <p class="eyebrow">Case</p>
+              <h2 id="viewer-title">Select a file</h2>
+            </div>
             <p id="viewer-meta"></p>
           </header>
           <div id="chips" class="chips"></div>
-          <pre id="viewer-body">Specs, mesh checks, solver logs, and force coefficients open here.</pre>
+          <div id="study-actions" class="study-actions" hidden>
+            <button type="button" id="refine" disabled>Run the finer mesh</button>
+            <button type="button" id="paraview" class="quiet" disabled>Open in paraFoam</button>
+            <p id="delta" class="delta" hidden></p>
+          </div>
+          <section id="board" class="board" hidden aria-label="Comparison">
+            <h3>Nearby sections</h3>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Section</th><th>Cl</th><th>Cd</th><th>Gate</th></tr>
+                </thead>
+                <tbody id="board-body"></tbody>
+              </table>
+            </div>
+            <p id="board-note"></p>
+          </section>
+          <div id="stage" class="stage" hidden>
+            <div class="stage-head">
+              <h3 id="stage-title">Flow</h3>
+              <div class="field-toggle" role="group" aria-label="Field">
+                <button type="button" id="field-p" class="quiet active">Pressure</button>
+                <button type="button" id="field-u" class="quiet">Speed</button>
+              </div>
+            </div>
+            <canvas id="flow" aria-hidden="true"></canvas>
+            <p id="flow-note" class="note"></p>
+            <h3 id="forces-title">Forces</h3>
+            <canvas id="forces" aria-hidden="true"></canvas>
+          </div>
+          <h3 id="raw-title" class="raw-title" hidden>Raw file</h3>
+          <pre id="viewer-body" class="is-placeholder">Select a run to see the mesh, the pressure, and the force history.</pre>
         </article>
       </div>
     </section>

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -91,21 +92,105 @@ def _extract(stdout: str, structured: bool) -> dict:
         raise RuntimeError("grok returned no JSON")
     if not structured:
         return data
-    payload = data.get("structured_output")
-    if not isinstance(payload, dict):
-        payload = data.get("structuredOutput")
-    if isinstance(payload, dict):
-        return payload
-    text = data.get("text") or data.get("result")
-    if isinstance(text, dict):
-        return text
-    if isinstance(text, str):
-        inner = _json_object(text)
-        if isinstance(inner, dict) and "ready" in inner:
-            return inner
+    found = _find_interview(data)
+    if found is None:
+        raise RuntimeError("grok returned no interview object")
+    return found
+
+
+def _find_interview(data: dict) -> dict | None:
+    """Pull an interview object out of a headless JSON result.
+
+    A one-turn call often leaves structuredOutput null and parks the object in
+    text or thought, then exits because max turns was reached.
+    """
+    for key in ("structured_output", "structuredOutput"):
+        found = _coerce_interview(data.get(key))
+        if found is not None:
+            return found
+    for key in ("text", "result", "thought", "structuredOutputError", "structured_output_error"):
+        found = _coerce_interview(data.get(key))
+        if found is not None:
+            return found
     if "ready" in data and "say" in data:
         return data
-    raise RuntimeError("grok returned no interview object")
+    return None
+
+
+def _coerce_interview(value: object, depth: int = 0) -> dict | None:
+    if depth > 3:
+        return None
+    if isinstance(value, dict):
+        if _is_interview(value):
+            return value
+        if "structuredOutput" in value or "structured_output" in value or "text" in value:
+            return None
+        for item in value.values():
+            found = _coerce_interview(item, depth + 1)
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, str):
+        return _embedded_interview(value)
+    return None
+
+
+def _is_interview(value: dict) -> bool:
+    if "structuredOutput" in value or "structured_output" in value:
+        return False
+    return "ready" in value or "say" in value
+
+
+def _embedded_interview(text: str) -> dict | None:
+    direct = _json_object(text)
+    if isinstance(direct, dict) and _is_interview(direct):
+        return direct
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fence:
+        try:
+            fenced = json.loads(fence.group(1))
+        except json.JSONDecodeError:
+            fenced = None
+        if isinstance(fenced, dict) and _is_interview(fenced):
+            return fenced
+    start = 0
+    while True:
+        brace = text.find("{", start)
+        if brace < 0:
+            return None
+        value = _balanced_json(text, brace)
+        if isinstance(value, dict) and _is_interview(value):
+            return value
+        start = brace + 1
+
+
+def _balanced_json(text: str, start: int) -> dict | None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    value = json.loads(text[start : index + 1])
+                except json.JSONDecodeError:
+                    return None
+                return value if isinstance(value, dict) else None
+    return None
 
 
 def _json_object(text: str) -> dict | None:

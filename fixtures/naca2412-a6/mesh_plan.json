@@ -1,6 +1,6 @@
 {
-  "stream": 60,
+  "stream": 100,
   "grading": 8,
-  "cells": 9600,
-  "cells_expected": 9600
+  "cells": 64000,
+  "cells_expected": 64000
 }

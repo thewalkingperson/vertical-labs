@@ -11,12 +11,12 @@ Grafts from candidate 1, folded into this model:
 1. One closed legal-prefix table. `admit` appends a receipt only when `(stage, status)` is in `NEXT[shape(ledger)]`. `project` and the Lean file are derived from that table. A green forces receipt after a red or stopped prefix is not a row. Design grade exists only when the refinement run is green and the force delta is inside the bound. A screening cannot be passed to `hardware_decision`.
 2. Ledger pySHACL. A green report with an earlier red or stopped sibling fails. Force-delta numbers are shape constraints emitted from `Bounds`, not comments.
 
-Rejected: candidate 1's fixed C-grid and Spalart–Allmaras recipe, storing `grade` on a receipt, and any gate that lives only in a hook. Hooks fail open on this Grok, and a child does not reliably inherit them.
+Rejected: candidate 1's fixed C-grid, storing `grade` on a receipt, and any gate that lives only in a hook. Hooks fail open on this Grok, and a child does not reliably inherit them. The wing case does use a Spalart–Allmaras RAS setup modeled on the `airFoil2D` tutorial dictionaries. It does not copy that tutorial's `polyMesh` and it does not run its `Allrun`.
 
-Two numbers differ from candidate 2's draft because the live case would otherwise be unable to screen honestly:
+The flight-air viscosity is the production number:
 
-- `nu = 1e-2`. Default `U = 10` m/s and chord `1` m then give chord Reynolds number 1000. Candidate 2's `nu = 1.5e-5` is flight air at Re ≈ 6.7×10⁵, which a laminar `simpleFoam` setup does not represent. The stock `airFoil2D` tutorial is Spalart–Allmaras at about 26 m/s; that recipe was rejected. The design sentence still says this is not a flight-hardware release.
-- `rhoInf = 1`, `Aref = 0.1`. The mesh is one cell thick, `z = 0.1`. Incompressible `forceCoeffs` treats `p` as kinematic. With `rhoInf` equal to the coefficient density, `Aref = chord * thickness` makes `Cl` a per-unit-span coefficient. `Aref = 1` would shrink `Cl` by 10× and the thin-airfoil gate would refuse a correct integral.
+- `nu = 1.5e-5`. Default `U = 10` m/s and chord `1` m give chord Reynolds number 666667. The physics gate accepts only `1e5` to `5e6`. There is one model in that range, wall-modeled Spalart–Allmaras with `nutUSpaldingWallFunction`, checked against a NeuralFoil polar. There is no low-Reynolds branch and no thin-airfoil acceptance.
+- `rhoInf = 1`, `Aref = 0.1`. The mesh is one cell thick, `z = 0.1`. Incompressible `forceCoeffs` treats `p` as kinematic. With `rhoInf` equal to the coefficient density, `Aref = chord * span` makes `Cl` a per-unit-span coefficient. `Aref = 1` would shrink `Cl` by 10×.
 
 ## What the engineer can do
 
@@ -30,10 +30,10 @@ Happy path, one line per panel:
 
 ```text
 goal: NACA 2412 at 6 degrees, 10 m/s, coarse.
-meshing: stream 60, grading 8.
-mesh accepted: 9600 cells. Log: log.checkMesh
+meshing: stream 100, grading 8.
+mesh accepted: 64000 cells. Log: log.checkMesh
 solving: simpleFoam.
-screening: Cl=0.8600 Cd=0.0200. This mesh is not a design answer until the refinement gate passes.
+screening: Cl=0.8825 Cd=0.0284. This mesh is not a design answer until the refinement gate passes.
 ```
 
 A bad mesh stops at:
@@ -42,7 +42,7 @@ A bad mesh stops at:
 refused: Refused at gate mesh. Log: log.checkMesh
 ```
 
-There is no `Cl` on a refusal. A second angle (`Same wing at 8 degrees.`) is a new run and the same gates. `refine` runs only when the screening says the finer run is worth it. Its last line is either a design grade or a refusal at `refinement`. Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release. `hardware_decision` accepts only that design grade and raises `TypeError` on a screening.
+There is no `Cl` on a refusal. A second angle (`Same wing at 8 degrees.`) is a new run and the same gates. `refine` runs only when the screening says the finer run is worth it. Its last line is either a design grade or a refusal at `refinement`. Design grade is force agreement between the parent mesh and a 20% chordwise refinement on this wall-modeled Spalart-Allmaras setup. It is not mesh independence and it is not a flight-hardware release. `hardware_decision` accepts only that design grade and raises `TypeError` on a screening.
 
 Another thing the engineer can do that a tutorial `Allrun` does not: hand the same gates a correction (`max_non_ortho` was too loose, a tool ran that is not in the list) and get at most one structural change back, which cannot mark the CFD run as passed.
 
@@ -84,11 +84,11 @@ propose(Path("runs"))   # no grade field on the return value
 
 Public exports: `Engineer`, `EngineerView`, `Screening`, `DesignGrade`, `Refusal`, `HardwareDecision`, `hardware_decision`.
 
-`GateName` is `pilot | parse | scope | mesh | solve | forces | thin_airfoil | review | commission | refinement | budget | incomplete | lean | shacl | bounds`.
+`GateName` is `pilot | parse | scope | mesh | solve | forces | physics | review | commission | refinement | budget | incomplete | lean | shacl | bounds | agent`.
 
 `Screening.sentence` must equal `Bounds.screening_sentence`. `DesignGrade.sentence` must equal `Bounds.design_sentence`. `DesignGrade.__post_init__` rejects a delta outside `Bounds.delta_cl` / `Bounds.delta_cd`. `hardware_decision` raises `TypeError` unless its argument's type is `DesignGrade`.
 
-`project(parent, child, outer)` is the only function that builds a `Screening` or a `DesignGrade`. No outer verdict → `Refusal(gate="incomplete")`. Thin-airfoil red → `Refusal(gate="thin_airfoil")` with no coefficients on the view. Review challenge → `Screening` with `worth_finer` false. Review affirm mints commission. It does not mint design and it is not evidence for `Cl`.
+`project(parent, child, outer)` is the only function that builds a `Screening` or a `DesignGrade`. No outer verdict → `Refusal(gate="incomplete")`. Physics red → `Refusal(gate="physics")` with no coefficients on the view. Review challenge → `Screening` with `worth_finer` false. Review affirm mints commission. It does not mint design and it is not evidence for `Cl`. The reviewer receives an evidence packet and runs in a scratch directory with no tools and no file access.
 
 `DesignGrade` requires: parent projects to a `Screening` with `worth_finer` true, child density is `refined`, NACA / α / U match, both force receipts green, `judge_delta` true, child outer review affirmed.
 
@@ -134,27 +134,27 @@ Single numeric source: `wingline/kernel.py` `Bounds`. `python -m wingline.kernel
 |---|---|
 | alpha | [-2, 10] deg |
 | U | [5, 25] m/s, default 10 |
-| chord | 1 m |
-| nu | 1e-2 |
+| chord | default 1 m, allowed 0.01..100. Span defaults to 0.1 m |
+| nu | 1.5e-5 |
+| Reynolds number | speed * chord / nu, accepted only in 1e5..5e6 |
 | rho reference for coefficients | 1 |
-| thickness digit | 6..20 |
-| n_normal | 40 |
-| farfield | x ∈ [-8, 12], y ∈ [-8, 8], z ∈ [0, 0.1] |
-| end_time | 200 |
+| thickness digit | 6..24 |
+| n_normal | 160 |
+| wall grading scale | 125, so knob 8 becomes blockMesh ratio 1000 |
+| farfield | x ∈ [-8c, 12c], y ∈ [-8c, 8c], z ∈ [0, span]. At the defaults this is [-8, 12] × [-8, 8] × [0, 0.1] |
+| end_time | 600 |
 | mesh budget | 3 |
 | solve budget | 2 |
-| max agent turns | 8 |
+| max agent turns | 12 |
 | max non-ortho | 65 |
 | max skew | 4 |
-| continuity cumulative | 5e-3 |
+| local continuity | 1e-4. Cumulative 5e-3 is only a fallback for an old log |
+| reference tolerance | max(0.03, 0.05 * abs(Cl_ref)), minimum NeuralFoil confidence 0.90 |
 | cylinder cells / continuity / velocity error | 2000 / 5e-4 / 5e-5 |
 | delta Cl / Cd | 0.05 / 0.01 |
-| thin-airfoil | abs(cl - thin_cl) ≤ max(0.25, 0.35 * abs(thin_cl)) |
-| timeouts | mesh 90 s, solve 540 s, pilot 180 s |
+| timeouts | mesh 90 s, solve 1800 s, pilot 180 s |
 
-Cells: `n_chord = stream * (2 if refined else 1)` with `stream ∈ {60, 80}`. Six hexes give `4 * n_chord * n_normal` cells. Coarse is 9600 or 12800. Refined is 19200 or 25600.
-
-`thin_cl` is the 81-point cosine quadrature in candidate 2's design (NACA 4-digit mean line, `Cl = 2π (A0 + A1/2)`).
+Cells: `n_chord = stream * (2 if refined else 1)` with `stream ∈ {60, 80, 100}`. Six hexes give `4 * n_chord * n_normal` cells. The production parent is stream 100 coarse: 64000 cells. The production child is stream 60 refined: 76800 cells, which is 120 chordwise cells. That is a 20% chordwise increase, a local mesh sensitivity, not asymptotic mesh independence. The agent grading knob stays 2, 4, 8, or 12. The writer multiplies it by 125. At grading 8 the first cell over the 8 m farfield height is about 0.000340 m, and it scales with chord. The wall function is `nutUSpaldingWallFunction`, valid through the log layer. This is not a y+ below 1 integration. y+ min, max, and average are recorded on the solve receipt when the function object writes them. They are not a gate. `max_skew` stays 4. A skew failure is answered with milder grading or more wall-normal cells, not a looser bound. The refinement pair must share section, angle, speed, chord, and span.
 
 ## Loops
 
@@ -164,14 +164,14 @@ Inner. `ask` holds `engineer.lock` for the whole call. Order:
 2. Parse. Failure → `parse`, no case.
 3. Mint `run_id`. Write `runs/<id>/lease` (32 urlsafe bytes, mode `0600`).
 4. `perform_pilot()` in `mcp_server.py`. Not a model tool. Reuse `runs/pilot/latest.json` when it is green and the `openfoam` path plus the tutorial `Allrun` hash are unchanged. Red pilot → `Refusal(gate="pilot")`, do not plan a wing.
-5. Drive the five tools until the ledger shape is terminal or 8 turns elapse.
+5. Drive the five tools until the ledger shape is terminal or 12 turns elapse.
 6. Ignore model stdout. Load the ledger.
 7. Outer loop. Then `project`.
 
 Two drivers, same tools, same `admit`:
 
-- `WINGLINE_AGENT=1` spawns one headless parent. No subagents. Command flags that exist on this Grok: `--prompt-file`, `--cwd`, `-m grok-4.7`, `--reasoning-effort xhigh`, `--max-turns 8`, `--output-format json`, `--no-subagents`, `--disable-web-search`, `--permission-mode dontAsk`, `--deny` for Bash, Read, Edit, Write, Grep, WebFetch, WebSearch, Task, and `--disallowed-tools` for `run_terminal_command,write,search_replace,spawn_subagent,web_search,web_fetch,read_file,grep`. Do not invent an allow-rule syntax. MCP stays available because it is not denied. Environment: `WINGLINE_RUN_ID`, `WINGLINE_LEASE`. The prompt contains the lease, the run id, and the parsed spec. It does not restate gate policy.
-- Otherwise `wingline.planner` is the driver. It is a client, not an authority. First mesh commit is stream 60, grading 8. On a red mesh it changes one knob (grading 12, then 4, then stream 80). On `stopped` or `wall_clock` it stops. First solve is `u_relax` 0.7, `non_ortho` 0. A residual red may move to 0.5 or 0.3, then `non_ortho` 1. The server accepts any in-enum plan. The planner cannot append a receipt except through the tools.
+- `WINGLINE_AGENT` unset, or any value other than `0`, spawns one headless parent. No subagents. Command flags that exist on this Grok: `--prompt-file`, `--cwd`, `-m grok-4.7`, `--reasoning-effort xhigh`, `--max-turns 12`, `--output-format json`, `--no-subagents`, `--disable-web-search`, `--permission-mode dontAsk`, `--allow wingline__observe`, `--allow wingline__commit_spec`, `--allow wingline__commit_mesh`, `--allow wingline__commit_solve`, `--allow wingline__commit_forces`, `--deny` for Bash, Read, Edit, Write, Grep, WebFetch, WebSearch, Task, and `--disallowed-tools` for `run_terminal_command,write,search_replace,spawn_subagent,web_search,web_fetch,read_file,grep`. `--permission-mode dontAsk` alone is not enough: a headless MCP call still asks for approval unless the exact tool is allowed. MCP stays available because the five tools are allowed. Environment: `WINGLINE_RUN_ID`, `WINGLINE_LEASE`, `WINGLINE_STORE`. The prompt contains the lease, the run id, the parsed spec, and the exact five tool names. It does not restate gate policy. If the agent exits with a non-terminal ledger, the run refuses at gate `agent`; there is no automatic fallback.
+- `WINGLINE_AGENT=0` selects `wingline.planner` explicitly. It is a deterministic client for tests and debugging, not a rescue. It is a client, not an authority. The parent's first mesh is stream 100, grading 8. The refined child's first mesh is stream 60, grading 8. On a red mesh it changes one knob: milder grading in that density's table, then stream 80. On `stopped` or `wall_clock` it stops. The first solve is `u_relax` 0.5, `non_ortho` 1. A local-residual red may move to 0.5 or 0.3 and then add a non-orthogonal corrector. The server accepts any in-enum plan. The planner cannot append a receipt except through the tools.
 
 Outer. `outer.py` reads the ledger and the case. It does not read the agent transcript. It writes only `runs/<id>/outer/verdict.json`. It does not edit a skill, a bound, a hook, or a case file. First failure wins:
 
@@ -180,10 +180,10 @@ Outer. `outer.py` reads the ledger and the case. It does not read the agent tran
 3. `lean` on `harness/gate/Gate.lean` with the emitted table. Non-zero or missing → `lean`. Do not skip.
 4. Re-judge every receipt with the same `judge_*`. Disagreement refuses at that gate.
 5. Inner red or stopped → refused at that gate. No reviewer.
-6. `judge_thin`. Red → `thin_airfoil`.
-7. Fresh-context review only if thin is green and `WINGLINE_AGENT=1`. Otherwise the review step records `challenge` when a physics-green screening is not worth an automatic finer run, except the fixture's `outer_affirm.json` path used by tests. A challenge still yields `Screening` with `worth_finer` false. Unparseable reviewer stdout is `challenge`.
+6. `judge_physics`. It compares measured Cl with the NeuralFoil polar. Red → `physics`. A missing install, an out-of-range Reynolds number, or a low-confidence analysis fails closed. There is no second model.
+7. Fresh-context review only if physics is green and `WINGLINE_AGENT` is not `0`. The prompt is the evidence packet: spec, mesh cells and expected cells, local continuity, Cl, Cd, the NeuralFoil reference, its confidence, the tolerance, and any red log tail. The reviewer runs in a scratch directory with no tools and cannot read files. It may affirm only when every receipt is green, the cell count matches, local continuity is inside the bound, Cd is positive, and Cl is inside the NeuralFoil tolerance. Otherwise the review step records `challenge`, except the fixture's `outer_affirm.json` path used by tests. A challenge still yields `Screening` with `worth_finer` false. Unparseable reviewer stdout is `challenge`. The evidence and raw answer are saved in `outer/review.json`.
 
-`refine` refuses up front, without a case, unless the parent outcome is a `Screening` with `worth_finer` true. The child is a new run, density `refined`, same NACA, α, and U. The parent case is not modified.
+`refine` refuses up front, without a case, unless the parent outcome is a `Screening` with `worth_finer` true. The child is a new run, density `refined`, same NACA, α, and U. The planner and the agent then open that child at stream 60, grading 8. They do not keep the parent's stream 100, which would double it to 200 chordwise cells. The parent case is not modified.
 
 Meta. `propose` holds `engineer.lock` between runs. It does not write a ledger, a case, or a verdict. Newest unresolved correction wins. Ship the first template that holds. Do not ship the ones below it.
 
@@ -276,13 +276,13 @@ pilot:  rm -rf case && cp -R "$FOAM_TUTORIALS/basic/potentialFoam/cylinder" case
 
 `checkMesh` must report `Mesh OK` and `nCells` equal to `cell_count`. The cylinder pilot is green only when `judge_pilot` matches the smoke bounds. The smoke on this Mac printed `nCells: 2000`, `Continuity error = 0.000135471`, `Interpolated velocity error = 1.18729e-05`.
 
-Case: `simpleFoam`, `simulationType laminar`, Newtonian `nu 1e-2`, `endTime 200`, `deltaT 1`, `writeInterval 200`, `purgeWrite 1`. No `decomposePar`, no `paraFoam`, no `snappyHexMesh`. Do not copy `airFoil2D`'s `polyMesh` and do not run its `Allrun` (`parallel=true`).
+Case: `simpleFoam`, RAS Spalart–Allmaras, Newtonian `nu 1.5e-5`, `endTime 600`, `deltaT 1`. Volume fields use `writeInterval 20` and `purgeWrite 10`. `forceCoeffs` still uses `writeInterval 1`. `paraFoam -vtk` opens that case. No `decomposePar`, no `snappyHexMesh`. Do not copy `airFoil2D`'s `polyMesh` and do not run its `Allrun` (`parallel=true`). The cylinder pilot stays the potentialFoam tutorial copy. It is not an SA wing.
 
-Schemes: `ddt steadyState`; `grad Gauss linear`; `div(phi,U) bounded Gauss linearUpwind grad(U)`; `div((nuEff*dev2(T(grad(U))))) Gauss linear`; laplacian `Gauss linear corrected`. No `nuTilda`.
+Schemes: `ddt steadyState`; `grad Gauss linear`; `div(phi,U) bounded Gauss linearUpwind grad(U)`; `div(phi,nuTilda) bounded Gauss linearUpwind grad(nuTilda)`; `div((nuEff*dev2(T(grad(U))))) Gauss linear`; laplacian `Gauss linear corrected`; `wallDist meshWave`.
 
-`fvSolution`: GAMG on `p` (tolerance 1e-6, relTol 0.1), smoothSolver GaussSeidel on `U` (tolerance 1e-8, relTol 0.1). `nNonOrthogonalCorrectors` from the plan. Relaxation `p` 0.3, `U` from the plan.
+`fvSolution`: GAMG on `p` (tolerance 1e-6, relTol 0.1), smoothSolver GaussSeidel on `U` and `nuTilda` (tolerance 1e-8, relTol 0.1, nSweeps 2). SIMPLE residual control on `p`, `U`, and `nuTilda` is 1e-5. `nNonOrthogonalCorrectors` from the plan. Relaxation `p` 0.3, `U` from the plan, `nuTilda` 0.7. The production opening plan is `u_relax` 0.5 and one non-orthogonal corrector.
 
-`0/U`: internalField `(U cos α, U sin α, 0)`. `farfield` and `outlet` `freestreamVelocity`. `walls` `noSlip`. `frontAndBack` `empty`. `0/p`: uniform 0, farfield and outlet `freestreamPressure`, walls `zeroGradient`.
+`0/U`: internalField `(U cos α, U sin α, 0)`. `farfield` and `outlet` `freestreamVelocity`. `walls` `noSlip`. `frontAndBack` `empty`. `0/p`: uniform 0, farfield and outlet `freestreamPressure`, walls `zeroGradient`. `0/nuTilda`: internal `3*nu`, walls `fixedValue 0`, farfield and outlet freestream. `0/nut`: internal 0, walls `nutUSpaldingWallFunction`.
 
 `forceCoeffs` in `controlDict`: `libs (forces)`, `patches (walls)`, `rho rhoInf`, `rhoInf 1`, `CofR (0.25 0 0)`, `pitchAxis (0 0 1)`, `lRef 1`, `Aref 0.1`, `magUInf` from the spec, `liftDir (-sin α, cos α, 0)`, `dragDir (cos α, sin α, 0)` with α in radians. Parser reads `postProcessing/forceCoeffs/0/coefficient.dat`, columns by the header tokens `Cl` and `Cd`, last data row. Never by a fixed column index.
 
@@ -297,7 +297,7 @@ yt = 5 t (0.2969 √x - 0.1260 x - 0.3516 x² + 0.2843 x³ - 0.1036 x⁴)
 
 Mesh: six hexes, one vertex list, no `mergePatchPairs`. BlockMesh allows one edge between a given vertex pair, so the upper and lower surfaces must not both be a single edge from the leading edge to the trailing edge. Split each surface at the crown (the polyline sample nearest maximum thickness). Four airfoil edges, four vertex pairs: leading-edge to crown-upper, crown-upper to trailing-edge, leading-edge to crown-lower, crown-lower to trailing-edge. The trailing edge is one shared vertex. The wake centerline from that vertex to the outlet mid-height is one straight edge, shared by the upper and lower wake blocks, and it is not listed twice.
 
-Cell counts: `n_chord` is `stream` on a coarse mesh and `2 * stream` on a refined mesh (same rule as `kernel.cell_count`). `n_lead = n_chord // 2`, `n_trail = n_chord - n_lead`, `n_wake = n_chord`, `n_normal = 40`. Cells = `2 * (n_lead + n_trail + n_wake) * n_normal`, which equals `4 * n_chord * n_normal` (9600 at stream 60). One cell from `z = 0` to `z = 0.1`.
+Cell counts: `n_chord` is `stream` on a coarse mesh and `2 * stream` on a refined mesh (same rule as `kernel.cell_count`). `n_lead = n_chord // 2`, `n_trail = n_chord - n_lead`, `n_wake = n_chord`, `n_normal = 160`. Cells = `2 * (n_lead + n_trail + n_wake) * n_normal`, which equals `4 * n_chord * n_normal` (64000 at stream 100 coarse, 76800 at stream 60 refined). One cell from `z = 0` to `z = 0.1`. Wall-normal `simpleGrading` is the agent knob times 125. Nose ratios stay 0.5 on the upper lead block and 2 on the lower lead block.
 
 Corners: nose `(-8, 0)`, top `y = 8`, bottom `y = -8`, outlet `x = 12`. Straight edges on the farfield (no arcs). Angle of attack stays on the freestream, not on the points. `simpleGrading` clusters cells toward the airfoil. Patches: `farfield` (nose, top, and bottom), `outlet` (`x = 12`), `walls` (the four airfoil faces only), `frontAndBack` empty. If `checkMesh` reports inverted cells, flip that block once. A remaining failure is a red mesh receipt, not a rewritten cell formula.
 
@@ -310,29 +310,30 @@ Corners: nose `(-8, 0)`, top `y = 8`, bottom `y = -8`, outlet `x = 12`. Straight
 | ask.txt | `NACA 2412 at 6 degrees. Is this worth a finer run?` |
 | again.txt | `Same wing at 8 degrees.` |
 | spec.json | naca 2412, alpha 6, u 10, density coarse |
-| mesh_plan.json | stream 60, grading 8, cells 9600 |
-| solve_plan.json | u_relax 0.7, non_ortho 0 |
+| mesh_plan.json | stream 100, grading 8, cells 64000 |
+| solve_plan.json | u_relax 0.5, non_ortho 1 |
 | sentence.txt | screening sentence, exact |
 | design_sentence.txt | design sentence, exact |
-| ledger_green/ | pilot, scope, mesh, solve, forces, all green |
+| ledger_green/ | pilot, scope, mesh, solve, forces, all green. Cl 0.882459, Cd 0.028414 |
 | ledger_mesh_red/ | scope green, mesh red (`max_non_ortho` 80), no forces file |
-| ledger_design/ | parent Cl 0.86 Cd 0.02; child Cl 0.89 Cd 0.018 |
-| ledger_wide/ | child Cl 0.97 against parent 0.86 (delta 0.11) |
+| ledger_design/ | parent Cl 0.882458973 Cd 0.0284136587; child stream 60 refined, Cl 0.855949564 Cd 0.0280312507 |
+| ledger_wide/ | child Cl 0.97 against parent 0.882459, outside delta_cl 0.05 |
 | cylinder_log.txt | the three smoke lines |
-| outer_affirm.json | thin green, review affirm |
-| outer_challenge.json | thin green, review challenge |
+| outer_affirm.json | physics green, review affirm |
+| outer_challenge.json | physics green, review challenge |
 
 `tests/test_project_2412.py` asserts: green + affirm → `Screening`, exact sentence, `worth_finer` true, and `hardware_decision` on that screening raises `TypeError`. Green + challenge → `worth_finer` false. Mesh red → `Refusal(gate="mesh")`, no screening panel. Wide delta → not a `DesignGrade`. Missing outer file → `Refusal(gate="incomplete")`. `judge_delta(0.05, 0.01)` is true. `judge_delta(0.051, 0.0)` is false. A forces-green ledger with an earlier red mesh is rejected by `admit` and by pySHACL.
 
 `tests/test_openfoam_boundary.py` fails if the substring `openfoam` appears outside `case_writer.py`. `tests/test_import_boundary.py` fails if anything other than `mcp_server.py` imports `case_writer`. `meta.py` must not name `DesignGrade`.
 
-`tests/test_live_2412.py` is skipped unless `WINGLINE_LIVE=1`. It runs the planner (not a nested Grok) on `ask.txt` and asserts the outcome is a `Screening` or a `Refusal` whose `gate` is one of `mesh`, `solve`, `forces`, `thin_airfoil`, `pilot` and whose `log` names a real file under the run.
+`tests/test_live_2412.py` is skipped unless `WINGLINE_LIVE=1`. It runs the planner (not a nested Grok) on `ask.txt` and asserts the outcome is a `Screening` or a `Refusal` whose `gate` is one of `mesh`, `solve`, `forces`, `physics`, `pilot` and whose `log` names a real file under the run.
 
 ## Modules
 
 ```text
 wingline/__init__.py
-wingline/kernel.py          Bounds, NEXT, admit, project, judge_*, thin_cl, emit
+wingline/kernel.py          Bounds, NEXT, admit, project, judge_*, emit
+wingline/reference.py       NeuralFoil polar. Lazy import. No wingline imports
 wingline/case_writer.py     render, parsers, flock, ledger io, run_foam
 wingline/mcp_server.py      five tools and perform_pilot. Only importer of case_writer
 wingline/engineer.py        open, ask, refine, parse, locks

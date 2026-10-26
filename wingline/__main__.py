@@ -12,6 +12,15 @@ from wingline.meta import NeedsAnswer, Study, resolve
 from wingline.outer import explore
 
 
+def _refused_line(outcome: Refusal) -> str:
+    line = f"refused: Refused at gate {outcome.gate}."
+    if outcome.log:
+        line += f" Log: {outcome.log}"
+    if outcome.gate == "physics" and outcome.reason:
+        return f"{line} {outcome.reason}"
+    return line
+
+
 def panel_lines(outcome: object) -> list[str]:
     panels = getattr(outcome, "panels", ())
     lines: list[str] = []
@@ -32,10 +41,13 @@ def panel_lines(outcome: object) -> list[str]:
             lines.append(f"design: {panel.text}")
         elif kind in {"mesh_refused", "solve_refused", "refused"} and not refused:
             if isinstance(outcome, Refusal):
-                lines.append(f"refused: Refused at gate {outcome.gate}. Log: {outcome.log}")
+                if outcome.gate == "parse" and any(line.startswith("goal: ") and line.strip() != "goal:" for line in lines):
+                    refused = True
+                    continue
+                lines.append(_refused_line(outcome))
                 refused = True
     if isinstance(outcome, Refusal) and not refused:
-        lines.append(f"refused: Refused at gate {outcome.gate}. Log: {outcome.log}")
+        lines.append(_refused_line(outcome))
     return lines
 
 

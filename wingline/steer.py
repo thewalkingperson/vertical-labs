@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 _GRADING = (2, 4, 8, 12)
-_STREAM = (60, 80)
+_STREAM = (60, 80, 100)
 _RELAX = (0.7, 0.5, 0.3)
 _ORTHO = (0, 1, 2)
 
@@ -77,18 +77,33 @@ def interpret_steer(messages: list[str], stage: str) -> dict:
     text = " ".join(messages).lower()
     if not text.strip():
         return {"action": "none"}
-    if re.search(r"\b(stop|halt|cancel|enough)\b", text):
+    if re.search(r"\b(stop|halt|cancel|enough|abort|kill)\b", text):
         return {"action": "stop", "text": text}
     choice: dict = {"action": "note", "text": text}
     if stage == "mesh":
         grading = re.search(r"grading\s*(2|4|8|12)\b", text)
-        stream = re.search(r"stream\s*(60|80)\b", text)
+        stream = re.search(r"stream\s*(60|80|100)\b", text)
         if grading or stream:
             choice["action"] = "knob"
             if grading and int(grading.group(1)) in _GRADING:
                 choice["grading"] = int(grading.group(1))
             if stream and int(stream.group(1)) in _STREAM:
                 choice["stream"] = int(stream.group(1))
+        elif re.search(
+            r"\b(gentle|mild|mild\s+grading|gentle\s+clustering|reduce\s+clustering|lower\s+grading|reduce\s+skew)\b",
+            text,
+        ):
+            choice["action"] = "knob"
+            choice["grading"] = 4
+        elif re.search(r"\b(tight|steep|high\s+clustering|higher\s+grading)\b", text):
+            choice["action"] = "knob"
+            choice["grading"] = 12
+        elif re.search(r"\b(dense|fine|refine|higher\s+resolution)\b", text):
+            choice["action"] = "knob"
+            choice["stream"] = 100
+        elif re.search(r"\b(coarse|fast|lower\s+resolution)\b", text):
+            choice["action"] = "knob"
+            choice["stream"] = 60
     elif stage == "solve":
         relax = re.search(r"(?:relax|u_relax)\s*(0\.7|0\.5|0\.3)\b", text)
         ortho = re.search(r"non[- ]?ortho\s*(0|1|2)\b", text)
@@ -98,4 +113,16 @@ def interpret_steer(messages: list[str], stage: str) -> dict:
                 choice["u_relax"] = float(relax.group(1))
             if ortho and int(ortho.group(1)) in _ORTHO:
                 choice["non_ortho"] = int(ortho.group(1))
+        elif re.search(r"\b(relax|damp\w*|slow|stabilize|under[- ]?relax)\b", text):
+            choice["action"] = "knob"
+            choice["u_relax"] = 0.5
+        elif re.search(r"\b(aggressive|fast|speed\s+up)\b", text):
+            choice["action"] = "knob"
+            choice["u_relax"] = 0.7
+        elif re.search(
+            r"\b(correct\s+(?:non[- ]?)?ortho|non[- ]?orthogonal|add\s+corrector)\b",
+            text,
+        ):
+            choice["action"] = "knob"
+            choice["non_ortho"] = 1
     return choice

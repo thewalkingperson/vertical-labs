@@ -13,5 +13,9 @@
   "alpha_deg": 6,
   "u_ms": 10,
   "density": "refined",
-  "pilot_id": "rcpt-pilot-run-2412-a6-w"
+  "pilot_id": "rcpt-pilot-run-2412-a6-w",
+  "nu": 1.5e-05,
+  "reynolds": 666666.6666666666,
+  "turbulence_model": "SpalartAllmaras",
+  "reference_model": "NeuralFoil"
 }

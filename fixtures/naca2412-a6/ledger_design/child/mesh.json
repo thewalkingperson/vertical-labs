@@ -11,9 +11,12 @@
   "written_at": "2026-10-23T00:00:00Z",
   "stream": 60,
   "grading": 8,
-  "cells": 19200,
-  "cells_expected": 19200,
-  "max_non_ortho": 48.0,
-  "max_skew": 1.1,
-  "signature": "sha256:mesh-refined"
+  "cells": 76800,
+  "cells_expected": 76800,
+  "max_non_ortho": 63.507934,
+  "max_skew": 1.7345999,
+  "signature": "sha256:mesh-refined",
+  "n_normal": 160,
+  "wall_grading": 1000,
+  "first_cell_m": 0.000340444269
 }

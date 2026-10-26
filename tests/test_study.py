@@ -2,6 +2,9 @@
 
 from pathlib import Path
 
+import json
+
+from wingline.grok_call import _extract
 from wingline.kernel import Refusal
 from wingline.meta import Study, resolve
 from wingline.outer import better, probes
@@ -75,6 +78,50 @@ def test_low_drag_asks_in_the_models_words(tmp_path: Path) -> None:
     assert "press enter" not in dialogue.lower()
 
 
+def test_a_plane_question_keeps_the_models_advice(tmp_path: Path) -> None:
+    advice = (
+        "The last reply did not close the interview. "
+        "A Cessna 172 wing is a NACA 2412, which is a shape this study can mesh. "
+        "I would start there. What angle should I hold?"
+    )
+    spoken = (
+        "A Cessna 172 wing is a NACA 2412, which is a shape this study can mesh. "
+        "I would start there. What angle should I hold?"
+    )
+
+    def model(prompt: str) -> dict:
+        assert "name each still-required fact" not in prompt
+        assert "Still required before a case can start" not in prompt
+        assert "4-digit section with thickness" not in prompt
+        if "(none)" in prompt:
+            assert "cessna" in prompt.lower()
+            return _ask(advice)
+        assert "6 degrees" in prompt
+        return _ask(
+            "I'll open NACA 2412 at 6 degrees and 10 m/s.",
+            ready=True,
+            naca="2412",
+            alpha_deg=6,
+            u_ms=10,
+        )
+
+    def reply(prompt: str) -> str:
+        assert prompt == spoken
+        assert "did not close" not in prompt.lower()
+        return "6 degrees"
+
+    study = resolve(
+        "I need a wing for a small plane, cessna sized, what should I do?",
+        tmp_path,
+        reply,
+        model,
+    )
+    assert isinstance(study, Study)
+    assert study.spec["naca"] == "2412"
+    assert study.spec["alpha_deg"] == 6
+    assert study.spec["u_ms"] == 10
+
+
 def test_bare_naca_asks_for_the_angle(tmp_path: Path) -> None:
     def model(prompt: str) -> dict:
         if "(none)" in prompt:
@@ -119,6 +166,126 @@ def test_a_rejected_spec_goes_back_to_the_model(tmp_path: Path) -> None:
     assert len(seen) == 2
 
 
+def test_a_failed_interview_names_the_missing_angle(tmp_path: Path) -> None:
+    def model(_prompt: str) -> dict:
+        raise RuntimeError("grok returned no interview object")
+
+    def reply(prompt: str) -> str:
+        assert "NACA 2411" in prompt
+        assert "Still needed:" in prompt
+        assert "angle of attack" in prompt
+        assert "-2" in prompt and "10" in prompt
+        assert "speed 10 m/s" in prompt
+        return "4"
+
+    study = resolve("I need to build an NACA 2411", tmp_path, reply, model)
+    assert isinstance(study, Study)
+    assert study.spec["naca"] == "2411"
+    assert study.spec["alpha_deg"] == 4
+    assert study.spec["u_ms"] == 10
+    assert "chord_m" not in study.spec
+    assert "span_m" not in study.spec
+    dialogue = (tmp_path / "meta" / "dialogue.jsonl").read_text()
+    assert "angle of attack" in dialogue
+    assert "4" in dialogue
+
+
+def test_a_failed_interview_asks_for_each_missing_fact(tmp_path: Path) -> None:
+    def model(_prompt: str) -> dict:
+        raise RuntimeError("grok returned no interview object")
+
+    seen: list[str] = []
+
+    def reply(prompt: str) -> str:
+        seen.append(prompt)
+        if len(seen) == 1:
+            assert "4-digit section" in prompt
+            assert "angle of attack" in prompt
+            return "2412"
+        assert "NACA 2412" in prompt
+        assert "angle of attack" in prompt
+        assert "4-digit" not in prompt
+        return "6 degrees"
+
+    study = resolve("a wing", tmp_path, reply, model)
+    assert isinstance(study, Study)
+    assert study.spec == {"naca": "2412", "alpha_deg": 6, "u_ms": 10, "density": "coarse"}
+    assert len(seen) == 2
+
+
+def test_a_lookup_aside_is_replaced_with_the_missing_fact(tmp_path: Path) -> None:
+    def model(prompt: str) -> dict:
+        if "(none)" in prompt:
+            return _ask(
+                "Angle of attack is still open. Checking how the interview should ask for it.",
+                naca="2411",
+                alpha_deg=0,
+                u_ms=10,
+            )
+        raise AssertionError("the angle reply settles without another model call")
+
+    def reply(prompt: str) -> str:
+        assert prompt.startswith("Already set: NACA 2411.")
+        assert "Still needed:" in prompt
+        assert "Checking how" not in prompt
+        return "6 degrees"
+
+    study = resolve("NACA 2411", tmp_path, reply, model)
+    assert isinstance(study, Study)
+    assert study.spec["naca"] == "2411"
+    assert study.spec["alpha_deg"] == 6
+
+
+def test_an_invented_angle_does_not_skip_the_question(tmp_path: Path) -> None:
+    def model(_prompt: str) -> dict:
+        return _ask(
+            "Starting 2411 at 0 degrees.",
+            ready=True,
+            naca="2411",
+            alpha_deg=0,
+            u_ms=10,
+        )
+
+    def reply(prompt: str) -> str:
+        assert "angle of attack" in prompt
+        return "5"
+
+    study = resolve("NACA 2411", tmp_path, reply, model)
+    assert isinstance(study, Study)
+    assert study.spec["alpha_deg"] == 5
+
+
+def test_extract_reads_an_interview_left_in_text_or_thought() -> None:
+    payload = {
+        "say": "Angle of attack is still open for the NACA 2411 case.",
+        "ready": False,
+        "naca": "2411",
+        "alpha_deg": 0,
+        "u_ms": 10,
+        "objective": "max_ld",
+    }
+    wrapped = {
+        "structuredOutput": None,
+        "structuredOutputError": "max turns reached",
+        "text": json.dumps(payload),
+        "thought": "",
+    }
+    assert _extract(json.dumps(wrapped), True)["say"] == payload["say"]
+    thought_only = {
+        "structuredOutput": None,
+        "text": "Checking the files.",
+        "thought": "note\n" + json.dumps(payload, indent=2),
+    }
+    assert _extract(json.dumps(thought_only), True)["ready"] is False
+    prose = {"structuredOutput": None, "text": "The angle is still open.", "thought": ""}
+    try:
+        _extract(json.dumps(prose), True)
+    except RuntimeError as exc:
+        assert str(exc) == "grok returned no interview object"
+    else:
+        raise AssertionError("prose without an interview object must stay a refusal")
+
+
 def test_stated_angle_outside_bounds_does_not_ask(tmp_path: Path) -> None:
     refused = resolve("a wing with low drag at 40 degrees", tmp_path, _boom)
     assert isinstance(refused, Refusal)
@@ -132,11 +299,20 @@ def test_neighbors_keep_a_named_angle() -> None:
     assert all(item["alpha_deg"] == 6 for item in found)
 
 
+def test_exploration_cap_is_ten_and_keeps_the_first_step() -> None:
+    spec = {"naca": "2412", "alpha_deg": 6, "u_ms": 10, "density": "coarse"}
+    found = probes(spec, alpha_fixed=True, budget=10)
+    assert len(found) == 10
+    assert [item["naca"] for item in found[:4]] == ["2410", "2414", "3412", "1412"]
+    assert len({item["naca"] for item in found}) == 10
+    assert all(item["alpha_deg"] == 6 for item in found)
+
+
 def test_lower_drag_wins_the_step() -> None:
-    direct = {"naca": "2412", "cl": 0.23, "cd": 0.14, "gate": "thin_airfoil"}
+    direct = {"naca": "2412", "cl": 0.23, "cd": 0.14, "gate": "physics"}
     rows = [
-        {"naca": "2410", "cl": 0.22, "cd": 0.10, "gate": "thin_airfoil"},
-        {"naca": "3412", "cl": 0.40, "cd": 0.20, "gate": "thin_airfoil"},
+        {"naca": "2410", "cl": 0.22, "cd": 0.10, "gate": "physics"},
+        {"naca": "3412", "cl": 0.40, "cd": 0.20, "gate": "physics"},
     ]
     chosen = better(direct, rows, "min_cd")
     assert chosen is not None

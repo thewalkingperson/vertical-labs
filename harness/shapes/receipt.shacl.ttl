@@ -1,33 +1,39 @@
 # BEGIN BOUNDS
-# nu 0.01
+# nu 1.5e-05
 # rho 1.0
 # aref 0.1
 # chord_m 1.0
+# chord [0.01, 100.0]
+# span [0.001, 50.0]
 # alpha [-2.0, 10.0]
 # U [5.0, 25.0] default 10.0
-# thickness [6, 20]
-# n_normal 40
+# thickness [6, 24]
+# n_normal 160
 # farfield x [-8.0, 12.0] y [-8.0, 8.0] z [0, 0.1]
-# end_time 200
+# end_time 600
 # mesh_budget 3
 # solve_budget 2
-# max_agent_turns 8
+# max_agent_turns 12
 # max_non_ortho 65.0
 # max_skew 4.0
+# continuity_local 0.0001
 # continuity_cum 0.005
+# reynolds [100000.0, 5000000.0]
+# reference_abs 0.03
+# reference_rel 0.05
+# reference_min_confidence 0.9
+# wall_grading_scale 125.0
 # cylinder_cells 2000
 # cylinder_continuity 0.0005
 # cylinder_velocity 5e-05
 # delta_cl 0.05
 # delta_cd 0.01
-# thin_abs 0.25
-# thin_rel 0.35
-# timeouts mesh 90 solve 540 pilot 180
-# cell_counts 9600 12800 19200 25600
-# streams 60 80
+# timeouts mesh 90 solve 1800 pilot 180
+# cell_counts 38400 51200 64000 76800 102400 128000
+# streams 60 80 100
 # gradings 2 4 8 12
 # screening_sentence This mesh is not a design answer until the refinement gate passes.
-# design_sentence Design grade is mesh agreement within the force-delta bound on this laminar setup. It is not a flight-hardware release.
+# design_sentence Design grade is force agreement between the parent mesh and a 20% chordwise refinement on this wall-modeled Spalart-Allmaras setup. It is not mesh independence and it is not a flight-hardware release.
 # END BOUNDS
 @prefix sh: <http://www.w3.org/ns/shacl#> .
 @prefix wl: <https://vertical-labs.local/wingline#> .
@@ -56,6 +62,11 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:alpha_deg ] ;
   sh:property [ sh:path wl:u_ms ] ;
   sh:property [ sh:path wl:density ] ;
+  sh:property [ sh:path wl:chord_m ] ;
+  sh:property [ sh:path wl:span_m ] ;
+  sh:property [ sh:path wl:camber ] ;
+  sh:property [ sh:path wl:camber_pos ] ;
+  sh:property [ sh:path wl:thickness ] ;
   sh:property [ sh:path wl:pilot_id ] ;
   sh:property [ sh:path wl:stream ] ;
   sh:property [ sh:path wl:grading ] ;
@@ -66,6 +77,19 @@ wl:ReceiptShape a sh:NodeShape ;
   sh:property [ sh:path wl:u_relax ] ;
   sh:property [ sh:path wl:non_ortho ] ;
   sh:property [ sh:path wl:continuity_cum ] ;
+  sh:property [ sh:path wl:continuity_local ] ;
+  sh:property [ sh:path wl:continuity_global ] ;
+  sh:property [ sh:path wl:n_normal ] ;
+  sh:property [ sh:path wl:wall_grading ] ;
+  sh:property [ sh:path wl:first_cell_m ] ;
+  sh:property [ sh:path wl:nu ] ;
+  sh:property [ sh:path wl:reynolds ] ;
+  sh:property [ sh:path wl:turbulence_model ] ;
+  sh:property [ sh:path wl:reference_model ] ;
+  sh:property [ sh:path wl:end_time ] ;
+  sh:property [ sh:path wl:yplus_min ] ;
+  sh:property [ sh:path wl:yplus_max ] ;
+  sh:property [ sh:path wl:yplus_avg ] ;
   sh:property [ sh:path wl:failure ] ;
   sh:property [ sh:path wl:cl ] ;
   sh:property [ sh:path wl:cd ] ;
@@ -74,7 +98,7 @@ wl:ReceiptShape a sh:NodeShape ;
 
 wl:MeshShape a sh:NodeShape ;
   sh:targetClass wl:MeshReceipt ;
-  sh:property [ sh:path wl:stream ; sh:in (60 80) ; sh:minCount 1 ] ;
+  sh:property [ sh:path wl:stream ; sh:in (60 80 100) ; sh:minCount 1 ] ;
   sh:property [ sh:path wl:grading ; sh:in (2 4 8 12) ; sh:minCount 1 ] ;
   sh:property [ sh:path wl:cells ; sh:equals wl:cells_expected ; sh:minCount 1 ] .
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import threading
 from datetime import datetime, timezone
@@ -17,9 +18,11 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from wingline.engineer import Engineer
 from wingline.files import list_files, list_runs, read_view
-from wingline.kernel import Refusal
+from wingline.kernel import Bounds, Refusal
 from wingline.meta import Study, resolve
-from wingline.outer import explore
+from wingline.outer import EXPLORE_CAP, board_view, explore, mark_origin
+from wingline.mcp_server import show_case
+from wingline.picture import flow_picture
 from wingline.steer import append_steer
 from wingline.__main__ import panel_lines
 
@@ -29,6 +32,127 @@ _HINTS = {
     "asking": "The study needs an answer before the next solve.",
     "running": "A run is open. A message now steers the agent on its next turn.",
 }
+_TIME = re.compile(r"^Time = (\d+)\s*$", re.MULTILINE)
+
+
+def _tail(path: Path, size: int = 6000) -> str:
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            handle.seek(max(0, end - size))
+            return handle.read().decode(errors="replace")
+    except OSError:
+        return ""
+
+
+def _spec_of(run_dir: Path) -> dict:
+    path = run_dir / "spec.json"
+    if not path.is_file():
+        return {}
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _wing_label(spec: dict) -> str:
+    naca = spec.get("naca")
+    if not naca:
+        return "This wing"
+    return f"NACA {naca} at {spec.get('alpha_deg')} degrees and {spec.get('u_ms')} m/s"
+
+
+def _saved_steps(case: Path) -> int:
+    count = 0
+    if not case.is_dir():
+        return 0
+    for child in case.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            float(child.name)
+        except ValueError:
+            continue
+        count += 1
+    return count
+
+
+def _case_step(case: Path) -> tuple[str, str]:
+    """Short header, then the sentence for the thinking row."""
+    if not (case / "system" / "controlDict").is_file() and not (case / "log.blockMesh").is_file():
+        return (
+            "Checking the cylinder",
+            "The cylinder health check runs before this wing. Then the mesh, the solve, and the forces.",
+        )
+    foam = case / "log.simpleFoam"
+    if foam.is_file():
+        tail = _tail(foam)
+        ended = any(line.strip() == "End" for line in tail.splitlines()[-12:])
+        times = _TIME.findall(tail)
+        step = times[-1] if times else ""
+        saved = _saved_steps(case)
+        if ended:
+            return (
+                "Grading the forces",
+                "simpleFoam has finished. The force coefficients are graded next, then paraFoam opens on the saved steps.",
+            )
+        if step:
+            return (
+                f"Solving step {step}",
+                f"simpleFoam is on step {step}. "
+                f"{saved} steps are already on disk, with velocity, pressure, and the forces kept at each one.",
+            )
+        return (
+            "Starting simpleFoam",
+            "simpleFoam is starting. Every step of velocity, pressure, and the forces stays on disk.",
+        )
+    if (case / "log.checkMesh").is_file():
+        return (
+            "Checking the mesh",
+            "checkMesh is grading skew and non-orthogonality. The solve waits for that gate.",
+        )
+    if (case / "log.blockMesh").is_file():
+        return (
+            "Building the mesh",
+            "blockMesh is building the hex mesh around the section.",
+        )
+    return (
+        "Writing the case",
+        "The case is written. blockMesh is next, then checkMesh, then simpleFoam.",
+    )
+
+
+def narrate(store: Path, phase: str, exploring: bool, run_id: str | None) -> dict:
+    """Who is working, a short status, and a sentence about the current step."""
+    if phase == "idle" and not exploring:
+        return {"who": "", "status": "Idle", "detail": ""}
+    if phase == "asking":
+        return {
+            "who": "Meta",
+            "status": "Waiting for you",
+            "detail": "Waiting for the missing fact. No OpenFOAM case opens until that answer is in.",
+        }
+    if not run_id:
+        return {
+            "who": "Meta",
+            "status": "Reading the request",
+            "detail": (
+                "Reading the request. If the section or the angle is missing, "
+                "the next line asks for it before OpenFOAM starts."
+            ),
+        }
+    spec = _spec_of(Path(store) / run_id)
+    label = _wing_label(spec)
+    short, step = _case_step(Path(store) / run_id / "case")
+    if exploring:
+        return {
+            "who": "Outer",
+            "status": "Exploring a neighbor",
+            "detail": f"The asked wing is already stored. This neighbor is {label}. {step}",
+        }
+    return {"who": "Inner", "status": short, "detail": f"{label}. {step}"}
 
 
 def _now() -> str:
@@ -66,8 +190,13 @@ class Workbench:
         self.messages: list[dict] = []
         self.early: list[str] = []
         self.answers: Queue[str] = Queue()
+        self.explore_on = os.environ.get("WINGLINE_EXPLORE", "1") != "0"
+        self.exploring = False
+        self._origin = ""
+        self._viewers: dict[str, object] = {}
         self._lock = threading.Lock()
         self._load()
+        self._load_explore()
 
     def open(self) -> None:
         self.engineer = Engineer.open(self.store)
@@ -90,6 +219,25 @@ class Workbench:
                 continue
             if isinstance(row, dict) and row.get("text"):
                 self.messages.append(row)
+
+    def _load_explore(self) -> None:
+        path = self.store / "explore.json"
+        if not path.is_file():
+            return
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        if isinstance(payload, dict) and "on" in payload:
+            self.explore_on = bool(payload["on"])
+
+    def set_explore(self, on: bool) -> dict:
+        with self._lock:
+            self.explore_on = bool(on)
+            (self.store / "explore.json").write_text(json.dumps({"on": self.explore_on}) + "\n")
+        snap = self.snapshot()
+        snap["ok"] = True
+        return snap
 
     def _remember(self, role: str, text: str, run_id: str | None = None) -> None:
         row = {
@@ -155,8 +303,10 @@ class Workbench:
         with self._lock:
             self.phase = "running"
             self.active_run = run_id
+            origin = self._origin
             pending = list(self.early)
             self.early.clear()
+        mark_origin(self.store, origin, run_id)
         for text in pending:
             append_steer(self.store / run_id, text)
             with self._lock:
@@ -193,27 +343,61 @@ class Workbench:
         view = self.engineer.ask(study.sentence, on_run=self._note_run)
         for line in panel_lines(view.outcome):
             self._say("result", line)
-        if os.environ.get("WINGLINE_EXPLORE", "1") == "0" or not view.run_id:
-            return
-        if isinstance(view.outcome, Refusal) and view.outcome.gate in {"parse", "bounds", "pilot", "meta"}:
-            return
-        self._say("outer", "Direct result is above. Searching nearby camber and thickness.")
+        if view.run_id:
+            opened = self.show_parafoam(view.run_id)
+            if opened.get("ok"):
+                self._say("meta", "paraFoam is showing this design.")
+            elif opened.get("error") == "viewer":
+                self._say("system", "paraFoam did not open. " + str(opened.get("detail") or ""))
+        self._search(study, view)
 
-        def run_case(sentence: str):
-            assert self.engineer is not None
-            return self.engineer.ask(sentence, on_run=self._note_run)
+    def _search(self, study: object, view: object) -> None:
+        """Quiet neighborhood. The tool client stores the cases. The chat stays still."""
+        if not self.explore_on or not getattr(view, "run_id", ""):
+            return
+        outcome = getattr(view, "outcome", None)
+        if isinstance(outcome, Refusal) and outcome.gate in {"parse", "bounds", "pilot", "meta"}:
+            return
+        if self.engineer is None:
+            return
+        previous = os.environ.get("WINGLINE_AGENT")
+        os.environ["WINGLINE_AGENT"] = "0"
+        with self._lock:
+            self.exploring = True
+            self._origin = str(getattr(view, "run_id", "") or "")
+        try:
 
-        for line in explore(self.store, study, view, run_case):
-            self._say("outer", line)
+            def run_case(sentence: str):
+                assert self.engineer is not None
+                return self.engineer.ask(sentence, on_run=self._note_run)
+
+            explore(self.store, study, view, run_case, budget=EXPLORE_CAP)
+        finally:
+            with self._lock:
+                self.exploring = False
+                self._origin = ""
+            if previous is None:
+                os.environ.pop("WINGLINE_AGENT", None)
+            else:
+                os.environ["WINGLINE_AGENT"] = previous
 
     def snapshot(self) -> dict:
         with self._lock:
             phase = self.phase
             active = self.active_run
             messages = self.messages[-200:]
+            explore_on = self.explore_on
+            exploring = self.exploring
+        activity = "exploring" if exploring else phase
+        story = narrate(self.store, phase, exploring, active)
         return {
             "phase": phase,
+            "activity": activity,
+            "explore": explore_on,
             "active_run": active,
+            "who": story["who"],
+            "status": story["status"],
+            "detail": story["detail"],
             "hint": _HINTS[phase],
             "messages": messages,
             "runs": list_runs(self.store, active),
@@ -226,6 +410,92 @@ class Workbench:
 
     def file_view(self, run_id: str, rel: str) -> dict:
         return read_view(self._run(run_id), rel)
+
+    def picture(self, run_id: str) -> dict:
+        return flow_picture(self._run(run_id))
+
+    def show_parafoam(self, run_id: str) -> dict:
+        """Open the asked case in paraFoam. A second call leaves the same window up."""
+        try:
+            case = self._run(run_id) / "case"
+        except ValueError:
+            return {"ok": False, "error": "run"}
+        if not (case / "system" / "controlDict").is_file():
+            return {"ok": False, "error": "case"}
+        current = self._viewers.get(run_id)
+        if current is not None and getattr(current, "poll", lambda: 0)() is None:
+            return {"ok": True, "showing": True, "run_id": run_id}
+        starter = getattr(self, "_start_parafoam", None) or show_case
+        try:
+            proc = starter(case)
+        except (OSError, RuntimeError, FileNotFoundError) as exc:
+            return {"ok": False, "error": "viewer", "detail": str(exc)}
+        self._viewers[run_id] = proc
+        return {"ok": True, "showing": True, "run_id": run_id}
+
+    def board(self, run_id: str) -> dict:
+        """Comparison for this run, or for the search that already listed it."""
+        run_dir = self._run(run_id)
+        own = run_dir / "outer" / "search.json"
+        if own.is_file():
+            return self._board_file(own, run_dir.name)
+        store = self.store.resolve()
+        for path in store.glob("run-*/outer/search.json"):
+            try:
+                if not path.resolve().is_relative_to(store):
+                    continue
+                payload = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+            rows = payload.get("rows") if isinstance(payload, dict) else None
+            if not isinstance(rows, list):
+                continue
+            if any(isinstance(row, dict) and row.get("run_id") == run_id for row in rows):
+                return self._board_file(path, path.parents[1].name)
+        return {"ready": False, "rows": [], "sentence": Bounds.design_sentence, "run_id": run_id}
+
+    def _board_file(self, path: Path, owner: str) -> dict:
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if not isinstance(payload, dict):
+            return {"ready": False, "rows": [], "sentence": Bounds.design_sentence, "run_id": owner}
+        view = board_view(payload)
+        view["run_id"] = owner
+        return view
+
+    def start_refine(self, run_id: str) -> dict:
+        with self._lock:
+            if self.phase != "idle":
+                return {"ok": False, "error": "busy"}
+            if self.engineer is None:
+                return {"ok": False, "error": "closed"}
+            try:
+                self._run(run_id)
+            except ValueError:
+                return {"ok": False, "error": "run"}
+            self.phase = "running"
+            self.active_run = run_id
+        thread = threading.Thread(target=self._refine_job, args=(run_id,), daemon=True)
+        thread.start()
+        return {"ok": True, "mode": "refine", "phase": "running"}
+
+    def _refine_job(self, run_id: str) -> None:
+        try:
+            if self.engineer is None:
+                raise RuntimeError("workbench is not open")
+            self._say("meta", "Running the finer mesh.")
+            view = self.engineer.refine(run_id, on_run=self._note_run)
+            for line in panel_lines(view.outcome):
+                self._say("result", line)
+        except Exception as exc:
+            self._say("system", f"The refinement stopped: {exc}")
+        finally:
+            with self._lock:
+                self.phase = "idle"
+                self.active_run = None
+                self.open_prompt = None
 
     def _run(self, run_id: str) -> Path:
         if not isinstance(run_id, str) or not run_id.startswith("run-"):
@@ -272,6 +542,44 @@ class Handler(BaseHTTPRequestHandler):
                 self.rfile.read(length)
             self._json(self.bench.reset_chat())
             return
+        if path == "/api/explore":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "json"}, 400)
+                return
+            if not isinstance(body, dict) or not isinstance(body.get("on"), bool):
+                self._json({"ok": False, "error": "on"}, 400)
+                return
+            self._json(self.bench.set_explore(body["on"]))
+            return
+        if path == "/api/refine":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "json"}, 400)
+                return
+            if not isinstance(body, dict):
+                self._json({"ok": False, "error": "run"}, 400)
+                return
+            result = self.bench.start_refine(str(body.get("run_id") or ""))
+            self._json(result, 200 if result.get("ok") else 400)
+            return
+        if path == "/api/paraview":
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            try:
+                body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+            except json.JSONDecodeError:
+                self._json({"ok": False, "error": "json"}, 400)
+                return
+            if not isinstance(body, dict):
+                self._json({"ok": False, "error": "run"}, 400)
+                return
+            result = self.bench.show_parafoam(str(body.get("run_id") or ""))
+            self._json(result, 200 if result.get("ok") else 400)
+            return
         if path != "/api/message":
             self.send_error(404)
             return
@@ -294,6 +602,12 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if len(parts) == 3:
                 self._json(self.bench.run_files(run_id))
+                return
+            if len(parts) == 4 and parts[3] == "picture":
+                self._json(self.bench.picture(run_id))
+                return
+            if len(parts) == 4 and parts[3] == "board":
+                self._json(self.bench.board(run_id))
                 return
             if len(parts) == 4 and parts[3] == "file":
                 rel = (query.get("path") or [""])[0]
