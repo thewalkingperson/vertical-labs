@@ -2,21 +2,6 @@
 
 Primitive AI engineer for one question: a NACA 4-digit wing on this Mac, screened by a coarse 2D OpenFOAM run, or refused at a named gate. The human asks in English. The model may only turn typed mesh and solver knobs. OpenFOAM v2606 runs only inside `wingline/case_writer.py`. A report is a projection of a legal receipt ledger plus an outer verdict. The model's stdout is stored and is not evidence.
 
-## Synthesis
-
-Base is candidate 2 (Wingline), from the arena at `/tmp/arena-vertical-labs/`. Cross-judge (`/tmp/arena-vertical-labs/judge.md`) and the parent agreed on that base. Scores tied 9–9. Candidate 2 is the base because the brief requires the agent to plan inside a gate, and only this design gives the model `MeshPlan` and `SolvePlan` enums. Candidate 1's inner loop is `follow next_gate` on a frozen mesh.
-
-Grafts from candidate 1, folded into this model:
-
-1. One closed legal-prefix table. `admit` appends a receipt only when `(stage, status)` is in `NEXT[shape(ledger)]`. `project` and the Lean file are derived from that table. A green forces receipt after a red or stopped prefix is not a row. Design grade exists only when the refinement run is green and the force delta is inside the bound. A screening cannot be passed to `hardware_decision`.
-2. Ledger pySHACL. A green report with an earlier red or stopped sibling fails. Force-delta numbers are shape constraints emitted from `Bounds`, not comments.
-
-Rejected: candidate 1's fixed C-grid, storing `grade` on a receipt, and any gate that lives only in a hook. Hooks fail open on this Grok, and a child does not reliably inherit them. The wing case does use a Spalart–Allmaras RAS setup modeled on the `airFoil2D` tutorial dictionaries. It does not copy that tutorial's `polyMesh` and it does not run its `Allrun`.
-
-The flight-air viscosity is the production number:
-
-- `nu = 1.5e-5`. Default `U = 10` m/s and chord `1` m give chord Reynolds number 666667. The physics gate accepts only `1e5` to `5e6`. There is one model in that range, wall-modeled Spalart–Allmaras with `nutUSpaldingWallFunction`, checked against a NeuralFoil polar. There is no low-Reynolds branch and no thin-airfoil acceptance.
-- `rhoInf = 1`, `Aref = 0.1`. The mesh is one cell thick, `z = 0.1`. Incompressible `forceCoeffs` treats `p` as kinematic. With `rhoInf` equal to the coefficient density, `Aref = chord * span` makes `Cl` a per-unit-span coefficient. `Aref = 1` would shrink `Cl` by 10×.
 
 ## What the engineer can do
 
