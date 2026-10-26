@@ -17,6 +17,7 @@ from queue import Queue
 from urllib.parse import parse_qs, unquote, urlparse
 
 from wingline.brief import engineer_brief
+from wingline.suggest import close_paragraph
 from wingline.engineer import Engineer
 from wingline.files import list_files, list_runs, read_view
 from wingline.kernel import Bounds, Refusal
@@ -335,7 +336,7 @@ class Workbench:
             raise RuntimeError("workbench is not open")
         study = resolve(text, self.store, self._reply)
         if not isinstance(study, Study):
-            self._say("engineer", engineer_brief(study))
+            self._say("engineer", close_paragraph(engineer_brief(study), study, None))
             return
         for note in study.notes:
             self._say("meta", note)
@@ -355,7 +356,11 @@ class Workbench:
                 viewer_error = str(opened.get("detail") or "")
         self._say(
             "engineer",
-            engineer_brief(outcome, run_dir, showing=showing, viewer_error=viewer_error),
+            close_paragraph(
+                engineer_brief(outcome, run_dir, showing=showing, viewer_error=viewer_error),
+                outcome,
+                run_dir,
+            ),
         )
 
     def _search(self, study: object, view: object) -> None:

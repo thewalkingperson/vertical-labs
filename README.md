@@ -67,7 +67,7 @@ The page is the same store:
 .venv/bin/python -m wingline.web
 ```
 
-Open http://127.0.0.1:8765. A finished study is one paragraph, not the gate lines. The sketch keeps the wing level and draws the wind at the angle. paraFoam opens the case in ParaView: color the slice by speed, and read Ux and Uy for the freestream. The words "NACA 2412" are in `spec.json` on the page, under Case files. Starting the page clears the chat and the `run-*` folders. The cylinder check and the exploration switch stay.
+Open http://127.0.0.1:8765. A finished study is one paragraph, not the gate lines. When that paragraph reports lift and drag, the model adds one or two sentences of advice from those receipts. It may name another NACA 4-digit section or an angle inside the bounds, and that sentence is not a gate. The sketch keeps the wing level and draws the wind at the angle. paraFoam opens the case in ParaView: color the slice by speed, and read Ux and Uy for the freestream. The words "NACA 2412" are in `spec.json` on the page, under Case files. Starting the page clears the chat and the `run-*` folders. The cylinder check and the exploration switch stay.
 
 ## Where the detail lives
 

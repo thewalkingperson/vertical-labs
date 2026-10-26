@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from wingline.case_writer import parse_force_coeffs
+from wingline.files import last_coefficients
 from wingline.kernel import Bounds, DesignGrade, Refusal, Screening
 
 
@@ -227,14 +227,21 @@ def _facts(run_dir: Path) -> dict:
         coeff = run_dir / "case" / "postProcessing" / "forceCoeffs" / "0" / "coefficient.dat"
         if coeff.is_file():
             try:
-                parsed = parse_force_coeffs(coeff.read_text(encoding="utf-8", errors="replace"))
+                parsed_cl, parsed_cd = last_coefficients(coeff.read_text(encoding="utf-8", errors="replace"))
             except OSError:
-                parsed = {}
-            if parsed.get("cl") is not None:
-                facts["cl"] = parsed["cl"]
-            if parsed.get("cd") is not None:
-                facts["cd"] = parsed["cd"]
+                parsed_cl, parsed_cd = None, None
+            if parsed_cl is not None:
+                facts["cl"] = parsed_cl
+            if parsed_cd is not None:
+                facts["cd"] = parsed_cd
     return facts
+
+
+def measured(run_dir: Path | None) -> dict:
+    """Numbers already on the receipts. The closing seat may quote these and nothing else."""
+    if run_dir is None:
+        return {}
+    return _facts(Path(run_dir))
 
 
 def _latest(ledger: Path, prefix: str) -> dict | None:

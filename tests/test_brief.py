@@ -53,6 +53,8 @@ def test_a_drifting_solve_is_one_paragraph(tmp_path: Path) -> None:
     assert "refusing the solve" in text
     assert "paraFoam" in text
     assert "0.00017" in text
+    assert "2410" not in text
+    assert "less thickness" not in text
     assert f"{Bounds.force_drift_max:.5f}".rstrip("0") in text or "0.0001" in text
 
 

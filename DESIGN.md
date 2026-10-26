@@ -338,6 +338,8 @@ Corners: nose `(-8, 0)`, top `y = 8`, bottom `y = -8`, outlet `x = 12`. Straight
 
 `python -m wingline.web` serves `http://127.0.0.1:8765` (`WINGLINE_WEB_PORT`). Starting it calls `clear_session`, which deletes the chat, `last_spec.json`, `observe.jsonl`, `meta/`, and every `run-*` directory. It keeps the cylinder health cache and `runs/explore.json`. Reset clears the transcript only. An open question stays, and a running study keeps going.
 
+A finished direct ask is one engineer paragraph taken from the receipts. When that paragraph has lift and drag, and `WINGLINE_AGENT` is not `0`, the closing seat (`SUGGEST_SYSTEM`) adds one or two sentences. The prompt limits those sentences to another NACA 4-digit section or an angle inside the bounds. The sentences are not a gate. A missing `grok` binary or a failed call leaves the receipt unchanged. A commission refusal does not ask for advice. The inner loop still may not propose another wing; its text is not the page.
+
 The side picture reads the mesh and the solved fields. The section stays level. The angle is the freestream. That picture does not launch ParaView. A finished direct ask opens the asked case once with `paraFoam -vtk`. The button posts the same opener. Run the finer mesh is available only when `worth_finer` is true.
 
 Constant exploration is on unless `runs/explore.json` says otherwise. When that file is absent, `WINGLINE_EXPLORE=0` starts the page with the switch off. When the switch is on, the page solves the asked wing, then up to 10 neighbors with the tool client (`WINGLINE_AGENT=0` only around those neighbor asks). Neighbors are stored and do not add chat lines. The command line still stops at 4 (`EXPLORE_BUDGET`). The asked wing stays first.
@@ -357,7 +359,8 @@ wingline/meta.py            correct, propose, templates
 wingline/files.py           read-only views of one run
 wingline/steer.py           messages sent while a run is open
 wingline/grok_call.py       one headless Grok call
-wingline/prompts.py         system prompts for meta, the inner loop, and review
+wingline/prompts.py         system prompts for meta, the inner loop, review, and the closing note
+wingline/suggest.py         closing seat. Calls grok after the receipt. Not a gate
 wingline/picture.py         mesh and force picture. Does not launch ParaView
 wingline/web.py             local workbench on 127.0.0.1:8765
 web/                        the workbench page

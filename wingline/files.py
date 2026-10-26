@@ -104,7 +104,7 @@ def _chip(label: str, value: object) -> dict:
     return {"label": label, "value": str(value)}
 
 
-def _last_coefficients(text: str) -> tuple[float | None, float | None]:
+def last_coefficients(text: str) -> tuple[float | None, float | None]:
     header: list[str] | None = None
     header_at = 0
     for index, line in enumerate(text.splitlines()):
@@ -204,7 +204,7 @@ def highlights(rel: str, text: str) -> list[dict]:
             chips.append(_chip("Turbulence", match.group(1)))
         return chips
     if rel.endswith("coefficient.dat"):
-        cl, cd = _last_coefficients(text)
+        cl, cd = last_coefficients(text)
         if cl is not None:
             chips.append(_chip("Cl", f"{cl:.4f}"))
         if cd is not None:

@@ -25,11 +25,13 @@ def run_grok(
     allow_tools: bool = False,
     env: dict | None = None,
     timeout_s: int = 600,
+    cwd: Path | None = None,
 ) -> dict:
     """Run grok. With a schema, return structured_output. Otherwise return the raw result object."""
     grok = shutil.which("grok")
     if not grok:
         raise RuntimeError("grok is not on PATH")
+    work = Path(cwd) if cwd is not None else _REPO
     handle = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False)
     path = Path(handle.name)
     handle.write(prompt)
@@ -42,7 +44,7 @@ def run_grok(
         "--prompt-file",
         str(path),
         "--cwd",
-        str(_REPO),
+        str(work),
         "-m",
         "grok-4.7",
         "--reasoning-effort",
@@ -71,7 +73,7 @@ def run_grok(
     try:
         completed = subprocess.run(
             cmd,
-            cwd=_REPO,
+            cwd=work,
             env=env,
             timeout=timeout_s,
             check=False,
