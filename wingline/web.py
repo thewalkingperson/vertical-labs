@@ -16,6 +16,7 @@ from pathlib import Path
 from queue import Queue
 from urllib.parse import parse_qs, unquote, urlparse
 
+from wingline.brief import engineer_brief
 from wingline.engineer import Engineer
 from wingline.files import list_files, list_runs, read_view
 from wingline.kernel import Bounds, Refusal
@@ -24,7 +25,6 @@ from wingline.outer import EXPLORE_CAP, board_view, explore, mark_origin
 from wingline.mcp_server import show_case
 from wingline.picture import flow_picture
 from wingline.steer import append_steer
-from wingline.__main__ import panel_lines
 
 _WEB = Path(__file__).resolve().parents[1] / "web"
 _HINTS = {
@@ -335,21 +335,28 @@ class Workbench:
             raise RuntimeError("workbench is not open")
         study = resolve(text, self.store, self._reply)
         if not isinstance(study, Study):
-            for line in panel_lines(study):
-                self._say("result", line)
+            self._say("engineer", engineer_brief(study))
             return
         for note in study.notes:
             self._say("meta", note)
         view = self.engineer.ask(study.sentence, on_run=self._note_run)
-        for line in panel_lines(view.outcome):
-            self._say("result", line)
-        if view.run_id:
-            opened = self.show_parafoam(view.run_id)
-            if opened.get("ok"):
-                self._say("meta", "paraFoam is showing this design.")
-            elif opened.get("error") == "viewer":
-                self._say("system", "paraFoam did not open. " + str(opened.get("detail") or ""))
+        self._report(view.outcome, view.run_id or None)
         self._search(study, view)
+
+    def _report(self, outcome: object, run_id: str | None, *, open_viewer: bool = True) -> None:
+        showing = False
+        viewer_error = ""
+        run_dir = self.store / run_id if run_id else None
+        if open_viewer and run_id:
+            opened = self.show_parafoam(run_id)
+            if opened.get("ok"):
+                showing = True
+            elif opened.get("error") == "viewer":
+                viewer_error = str(opened.get("detail") or "")
+        self._say(
+            "engineer",
+            engineer_brief(outcome, run_dir, showing=showing, viewer_error=viewer_error),
+        )
 
     def _search(self, study: object, view: object) -> None:
         """Quiet neighborhood. The tool client stores the cases. The chat stays still."""
@@ -485,10 +492,8 @@ class Workbench:
         try:
             if self.engineer is None:
                 raise RuntimeError("workbench is not open")
-            self._say("meta", "Running the finer mesh.")
             view = self.engineer.refine(run_id, on_run=self._note_run)
-            for line in panel_lines(view.outcome):
-                self._say("result", line)
+            self._report(view.outcome, view.run_id or run_id, open_viewer=False)
         except Exception as exc:
             self._say("system", f"The refinement stopped: {exc}")
         finally:

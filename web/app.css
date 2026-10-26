@@ -255,7 +255,8 @@ body {
 
 .bubble.meta { border-left: 3px solid #7aa0b8; }
 .bubble.steer { border-style: dashed; }
-.bubble.result { border-left: 3px solid var(--ok); background: #f7fbf8; }
+.bubble.result,
+.bubble.engineer { border-left: 3px solid var(--ok); background: #f7fbf8; }
 .bubble.outer { background: #f8f6f1; }
 .bubble.system { border-left: 3px solid var(--warn); background: #fffafa; }
 

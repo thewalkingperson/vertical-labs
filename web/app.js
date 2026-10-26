@@ -58,6 +58,7 @@ function roleName(role) {
   if (role === "steer") return "Steer";
   if (role === "outer") return "Outer";
   if (role === "result") return "Result";
+  if (role === "engineer") return "Engineer";
   return "System";
 }
 
