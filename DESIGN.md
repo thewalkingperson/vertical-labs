@@ -71,7 +71,7 @@ Grammar in `engineer.parse`. Anything else is `Refusal(gate="parse")` and no cas
 - `NACA 2412 at 6 degrees and 15 m/s.` → U=15.
 - `Same wing at 8 degrees.` → last NACA and U, α=8. No previous spec → parse refusal.
 - `NACA 2412 at 40 degrees.` → parse refusal (α outside [-2, 10]).
-- `NACA 9999 at 6 degrees.` → parse refusal (thickness outside 6..20).
+- `NACA 9999 at 6 degrees.` → parse refusal (thickness outside 6..24).
 
 Operator entry, not a method on `Engineer`:
 
@@ -90,7 +90,7 @@ Public exports: `Engineer`, `EngineerView`, `Screening`, `DesignGrade`, `Refusal
 
 `project(parent, child, outer)` is the only function that builds a `Screening` or a `DesignGrade`. No outer verdict → `Refusal(gate="incomplete")`. Physics red → `Refusal(gate="physics")` with no coefficients on the view. Review challenge → `Screening` with `worth_finer` false. Review affirm mints commission. It does not mint design and it is not evidence for `Cl`. The reviewer receives an evidence packet and runs in a scratch directory with no tools and no file access.
 
-`DesignGrade` requires: parent projects to a `Screening` with `worth_finer` true, child density is `refined`, NACA / α / U match, both force receipts green, `judge_delta` true, child outer review affirmed.
+`DesignGrade` requires: parent projects to a `Screening` with `worth_finer` true, child density is `refined`, NACA / α / U / chord / span match, both force receipts green, `judge_delta` true, child outer review affirmed.
 
 Panels, and only these tuples:
 
@@ -180,10 +180,10 @@ Outer. `outer.py` reads the ledger and the case. It does not read the agent tran
 3. `lean` on `harness/gate/Gate.lean` with the emitted table. Non-zero or missing → `lean`. Do not skip.
 4. Re-judge every receipt with the same `judge_*`. Disagreement refuses at that gate.
 5. Inner red or stopped → refused at that gate. No reviewer.
-6. `judge_physics`. It compares measured Cl with the NeuralFoil polar. Red → `physics`. A missing install, an out-of-range Reynolds number, or a low-confidence analysis fails closed. There is no second model.
-7. Fresh-context review only if physics is green and `WINGLINE_AGENT` is not `0`. The prompt is the evidence packet: spec, mesh cells and expected cells, local continuity, Cl, Cd, the NeuralFoil reference, its confidence, the tolerance, and any red log tail. The reviewer runs in a scratch directory with no tools and cannot read files. It may affirm only when every receipt is green, the cell count matches, local continuity is inside the bound, Cd is positive, and Cl is inside the NeuralFoil tolerance. Otherwise the review step records `challenge`, except the fixture's `outer_affirm.json` path used by tests. A challenge still yields `Screening` with `worth_finer` false. Unparseable reviewer stdout is `challenge`. The evidence and raw answer are saved in `outer/review.json`.
+6. `judge_physics`. It compares measured Cl with the NeuralFoil polar. Red → `physics`. A missing install, an out-of-range Reynolds number, or a low-confidence analysis fails closed. There is no second model. Reference Cd is recorded and is not a pass or fail. y+ is reported when present and is not required to be below 1. The physics gate stays lift-only. Mesh-to-mesh drag still uses `delta_cd` 0.01.
+7. Fresh-context review only if physics is green and `WINGLINE_AGENT` is not `0`. The prompt is the evidence packet: spec, mesh cells and expected cells, local continuity, Cl, Cd, the NeuralFoil reference, its confidence, the tolerance, and any red log tail. The reviewer runs in a scratch directory with no tools and cannot read files. It may affirm only when every receipt is green, the cell count matches, local continuity is inside the bound, Cd is positive, and Cl is inside the NeuralFoil tolerance. Reference Cd is context, not a pass or fail. y+ is reported when present and is not required to be below 1. Otherwise the review step records `challenge`, except the fixture's `outer_affirm.json` path used by tests. A challenge still yields `Screening` with `worth_finer` false. Unparseable reviewer stdout is `challenge`. The evidence and raw answer are saved in `outer/review.json`.
 
-`refine` refuses up front, without a case, unless the parent outcome is a `Screening` with `worth_finer` true. The child is a new run, density `refined`, same NACA, α, and U. The planner and the agent then open that child at stream 60, grading 8. They do not keep the parent's stream 100, which would double it to 200 chordwise cells. The parent case is not modified.
+`refine` refuses up front, without a case, unless the parent outcome is a `Screening` with `worth_finer` true. The child is a new run, density `refined`, same NACA, α, U, chord, and span. The planner and the agent then open that child at stream 60, grading 8. They do not keep the parent's stream 100, which would double it to 200 chordwise cells. The parent case is not modified.
 
 Meta. `propose` holds `engineer.lock` between runs. It does not write a ledger, a case, or a verdict. Newest unresolved correction wins. Ship the first template that holds. Do not ship the ones below it.
 
@@ -207,8 +207,10 @@ Server name `wingline`. FastMCP. Stdio. `.grok/config.toml` points at the repo v
 command = "<repo>/.venv/bin/python"
 args = ["-m", "wingline.mcp_server"]
 tool_timeout_sec = 120
-tool_timeouts = { observe = 10, commit_spec = 30, commit_mesh = 120, commit_solve = 600, commit_forces = 60 }
+tool_timeouts = { observe = 10, commit_spec = 30, commit_mesh = 120, commit_solve = 2100, commit_forces = 60 }
 ```
+
+The solve process cap is 1800 seconds. `commit_solve` is allowed 2100 seconds so the receipt can still be written if the process hits that cap. The other tool allowances stay as written. `commit_mesh` at 120 seconds is longer than the 90 second mesh process cap.
 
 | tool | arguments | effect |
 |---|---|---|
@@ -235,7 +237,8 @@ Hooks are defense in depth. The server still judges. Project hooks do not run un
 Skills, policy the server enforces is not restated as a second authority:
 
 - `.grok/skills/screen-wing/SKILL.md` — inner parent. `observe`, then the one commit for the open stage. Pass the lease unchanged. First knobs as the planner. Stop when `observe` says terminal. Do not paraphrase `Cl` into a hardware opinion.
-- `.grok/skills/review-case/SKILL.md` — scratch review workspace. One JSON object `{"verdict":"affirm"|"challenge","gate":"...","note":"..."}`. Cannot pass a run and cannot edit a gate.
+- `.grok/skills/review-case/SKILL.md` — scratch review workspace. One JSON object `{"verdict":"affirm"|"challenge","gate":"...","note":"..."}`. Cannot pass a run and cannot edit a gate. Reference Cd is context. y+ is not required to be below 1.
+- `.grok/skills/ask-engineer/SKILL.md` — interview before a case exists. NACA 4-digit only. Ask for the angle. Do not choose an angle. Do not start a solve.
 - `.grok/skills/meta-diagnose/SKILL.md` — scratch draft for template 6. One skill sentence. Do not declare CFD passed. Do not edit a file.
 
 ## Receipts
@@ -244,13 +247,13 @@ Skills, policy the server enforces is not restated as a second authority:
 
 Required on every receipt: `id`, `type`, `run_id`, `stage`, `status`, `parent_id` (null only on the first), `spec_hash`, `log`, `writer` = `case-writer`, `written_at`. No `grade` field. `sh:closed true` makes a `grade` property fail.
 
-Types: `PilotReceipt`, `ScopeReceipt`, `MeshReceipt`, `SolveReceipt`, `ForcesReceipt`, `StopReceipt`. Evidence fields match candidate 2's table (`stream`, `grading`, `cells`, `cells_expected`, `max_non_ortho`, `max_skew`, `signature`, `u_relax`, `non_ortho`, `continuity_cum`, `failure`, `cl`, `cd`, pilot `cells` / `continuity` / `velocity_error`).
+Types: `PilotReceipt`, `ScopeReceipt`, `MeshReceipt`, `SolveReceipt`, `ForcesReceipt`, `StopReceipt`. The closed shape allows `stream`, `grading`, `cells`, `cells_expected`, `max_non_ortho`, `max_skew`, `signature`, `n_normal`, `wall_grading`, `first_cell_m`, `u_relax`, `non_ortho`, `continuity_cum`, `continuity_local`, `continuity_global`, `nu`, `reynolds`, `turbulence_model`, `reference_model`, `end_time`, `yplus_min`, `yplus_max`, `yplus_avg`, `failure`, `cl`, and `cd`. Pilot receipts use `cells`, `continuity`, and `velocity_error`. Scope receipts may carry `naca`, `alpha_deg`, `u_ms`, `density`, `chord_m`, `span_m`, `camber`, `camber_pos`, `thickness`, and `pilot_id`. The y+ properties are optional. A receipt without them still conforms.
 
 pySHACL command: `pyshacl -s harness/shapes/receipt.shacl.ttl -df json-ld <graph.jsonld>`. The shape file is emitted. It includes:
 
 - writer is `case-writer`
 - status in green / red / stopped
-- stream in 60 / 80, grading in 2 / 4 / 8 / 12, on mesh receipts
+- stream in 60 / 80 / 100, grading in 2 / 4 / 8 / 12, on mesh receipts
 - `Cd > 0` on forces receipts
 - a SPARQL constraint: a `ForcesReceipt` with status green in a run that also contains red or stopped fails
 - a SPARQL or datatype constraint that a refinement delta record with `abs(delta_cl) > 0.05` or `abs(delta_cd) > 0.01` fails
@@ -276,7 +279,7 @@ pilot:  rm -rf case && cp -R "$FOAM_TUTORIALS/basic/potentialFoam/cylinder" case
 
 `checkMesh` must report `Mesh OK` and `nCells` equal to `cell_count`. The cylinder pilot is green only when `judge_pilot` matches the smoke bounds. The smoke on this Mac printed `nCells: 2000`, `Continuity error = 0.000135471`, `Interpolated velocity error = 1.18729e-05`.
 
-Case: `simpleFoam`, RAS Spalart–Allmaras, Newtonian `nu 1.5e-5`, `endTime 600`, `deltaT 1`. Volume fields use `writeInterval 20` and `purgeWrite 10`. `forceCoeffs` still uses `writeInterval 1`. `paraFoam -vtk` opens that case. No `decomposePar`, no `snappyHexMesh`. Do not copy `airFoil2D`'s `polyMesh` and do not run its `Allrun` (`parallel=true`). The cylinder pilot stays the potentialFoam tutorial copy. It is not an SA wing.
+Case: `simpleFoam`, RAS Spalart–Allmaras, Newtonian `nu 1.5e-5`, `endTime 600`, `deltaT 1`. Volume fields use `writeInterval 20` and `purgeWrite 10`. `forceCoeffs` still uses `writeInterval 1`. A `yPlus` function object, `libs (fieldFunctionObjects)`, writes at `writeInterval 600` with `writeFields false`. `paraFoam -vtk` opens that case. No `decomposePar`, no `snappyHexMesh`. Do not copy `airFoil2D`'s `polyMesh` and do not run its `Allrun` (`parallel=true`). The cylinder pilot stays the potentialFoam tutorial copy. It is not an SA wing.
 
 Schemes: `ddt steadyState`; `grad Gauss linear`; `div(phi,U) bounded Gauss linearUpwind grad(U)`; `div(phi,nuTilda) bounded Gauss linearUpwind grad(nuTilda)`; `div((nuEff*dev2(T(grad(U))))) Gauss linear`; laplacian `Gauss linear corrected`; `wallDist meshWave`.
 
@@ -314,10 +317,10 @@ Corners: nose `(-8, 0)`, top `y = 8`, bottom `y = -8`, outlet `x = 12`. Straight
 | solve_plan.json | u_relax 0.5, non_ortho 1 |
 | sentence.txt | screening sentence, exact |
 | design_sentence.txt | design sentence, exact |
-| ledger_green/ | pilot, scope, mesh, solve, forces, all green. Cl 0.882459, Cd 0.028414 |
+| ledger_green/ | pilot, scope, mesh, solve, forces, all green. Cl 0.882458973, Cd 0.0284136587 |
 | ledger_mesh_red/ | scope green, mesh red (`max_non_ortho` 80), no forces file |
 | ledger_design/ | parent Cl 0.882458973 Cd 0.0284136587; child stream 60 refined, Cl 0.855949564 Cd 0.0280312507 |
-| ledger_wide/ | child Cl 0.97 against parent 0.882459, outside delta_cl 0.05 |
+| ledger_wide/ | child Cl 0.97 against parent 0.882458973, outside delta_cl 0.05 |
 | cylinder_log.txt | the three smoke lines |
 | outer_affirm.json | physics green, review affirm |
 | outer_challenge.json | physics green, review challenge |
@@ -327,6 +330,14 @@ Corners: nose `(-8, 0)`, top `y = 8`, bottom `y = -8`, outlet `x = 12`. Straight
 `tests/test_openfoam_boundary.py` fails if the substring `openfoam` appears outside `case_writer.py`. `tests/test_import_boundary.py` fails if anything other than `mcp_server.py` imports `case_writer`. `meta.py` must not name `DesignGrade`.
 
 `tests/test_live_2412.py` is skipped unless `WINGLINE_LIVE=1`. It runs the planner (not a nested Grok) on `ask.txt` and asserts the outcome is a `Screening` or a `Refusal` whose `gate` is one of `mesh`, `solve`, `forces`, `physics`, `pilot` and whose `log` names a real file under the run.
+
+## Workbench
+
+`python -m wingline.web` serves `http://127.0.0.1:8765` (`WINGLINE_WEB_PORT`). Starting it calls `clear_session`, which deletes the chat, `last_spec.json`, `observe.jsonl`, `meta/`, and every `run-*` directory. It keeps the cylinder health cache and `runs/explore.json`. Reset clears the transcript only. An open question stays, and a running study keeps going.
+
+The side picture reads the mesh and the solved fields. The section stays level. The angle is the freestream. That picture does not launch ParaView. A finished direct ask opens the asked case once with `paraFoam -vtk`. The button posts the same opener. Run the finer mesh is available only when `worth_finer` is true.
+
+Constant exploration is on unless `runs/explore.json` says otherwise. When that file is absent, `WINGLINE_EXPLORE=0` starts the page with the switch off. When the switch is on, the page solves the asked wing, then up to 10 neighbors with the tool client (`WINGLINE_AGENT=0` only around those neighbor asks). Neighbors are stored and do not add chat lines. The command line still stops at 4 (`EXPLORE_BUDGET`). The asked wing stays first.
 
 ## Modules
 
@@ -340,6 +351,13 @@ wingline/engineer.py        open, ask, refine, parse, locks
 wingline/planner.py         knob policy. Calls the same tool functions
 wingline/outer.py           shacl, lean, re-judge, review, verdict
 wingline/meta.py            correct, propose, templates
+wingline/files.py           read-only views of one run
+wingline/steer.py           messages sent while a run is open
+wingline/grok_call.py       one headless Grok call
+wingline/prompts.py         system prompts for meta, the inner loop, and review
+wingline/picture.py         mesh and force picture. Does not launch ParaView
+wingline/web.py             local workbench on 127.0.0.1:8765
+web/                        the workbench page
 .grok/config.toml
 .grok/hooks/
 .grok/skills/
@@ -360,6 +378,7 @@ tests/
 | runs/<id>/outer/ | outer.py | project reads |
 | runs/corrections.jsonl | meta.correct | propose reads |
 | runs/meta/ | meta.propose | human reads |
+| runs/explore.json | web.py | read on workbench start |
 
 ## Build order
 

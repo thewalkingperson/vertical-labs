@@ -2,6 +2,8 @@
 
 > **Superseded on 2026-10-25.** Do not copy the withdrawn wall-resolved claim or the old lift band back into the tree. The production case is wall-modeled Spalart–Allmaras with `nutUSpaldingWallFunction`. y+ is recorded and is not required to be below 1. Do not switch the wall function to `nutLowReWallFunction`. The lift band is `max(0.03, 0.05 * abs(Cl_ref))` with minimum confidence `0.90`. Design grade is force agreement between the parent mesh and a 20% chordwise refinement. It is not mesh independence and it is not a flight-hardware release. Do not fail the physics gate on NeuralFoil Cd. Do not restore `reference_abs = 0.12`, `reference_rel = 0.15`, or `reference_min_confidence = 0.50`.
 
+**Status:** this brief has been applied. Do not treat the steps below as open work. Where a step still quotes an old fixture (`Cl` 0.86, 9600 cells) or an old assertion, the tree has moved on. `README.md` and `DESIGN.md` are the contract.
+
 **Audience:** the coding agent implementing the fix in `/Users/saarthakbhatia/Documents/vertical-labs`.
 **Goal:** make a live agent-driven NACA 2412 case use a defensible, wall-modeled turbulent RANS physics model, compare it to a real external polar, and reach `DesignGrade` through the existing refine path.
 
@@ -72,14 +74,14 @@ The pair is deliberately cross-stream: the parent is a 100-chord coarse mesh; th
 The parent `n160-s100-coarse` is the production opening mesh. The child `n160-s60-refined` is the existing 76,800-cell refined mesh. At 600 iterations the measured pair is:
 
 ```text
-parent: Cl = 0.882459, Cd = 0.028414
-child:  Cl = 0.856,    Cd = 0.0280
-delta:  Cl = -0.0265,  Cd = -0.0004
+parent: Cl = 0.882458973, Cd = 0.0284136587
+child:  Cl = 0.855949564, Cd = 0.0280312507
+delta:  Cl = -0.026509409, Cd = -0.000382408
 ```
 
-Both values are inside the tightened NeuralFoil tolerance (about `0.0449`), so both pass the physics gate. The design delta is inside the unchanged `0.05`/`0.01` bounds. Record the exact child `Cl`/`Cd` from its final `forceCoeffs` file if the production run differs from the probe by more than the printed precision.
+Both values are inside the tightened NeuralFoil tolerance (about `0.0449`), so both pass the physics gate. The design delta is inside the unchanged `0.05`/`0.01` bounds. These are the coefficients stored in `fixtures/naca2412-a6/ledger_design/`.
 
-If the final parent/child `delta_cl` is greater than `0.05`, the correct response is to increase the parent base stream to `120` or `n_normal` to `320`, rerun the pair, and record the new measured values. Do **not** change `Bounds.delta_cl`.
+The shipped pair stays inside `delta_cl` 0.05. A later 204,800-cell continuation reached Cl 0.769 at 1200 iterations and still missed that bound. Do not raise the parent stream to 120 and do not raise `n_normal` to 320. Do **not** change `Bounds.delta_cl`.
 
 ### Why this pair, and why not `160/320`
 
@@ -94,7 +96,7 @@ The converged probe data show that chordwise resolution matters a lot for this S
 | `n160-s100-coarse` | 64,000 | 0.8825 | 0.02841 | viable parent |
 | `n160-s160-refined` | 204,800 | 0.7235 | 0.03215 | fails reference and delta |
 
-The 60/120 and 80/160 pairs miss `delta_cl=0.05`. The 160/320 pair is worse: the 204,800-cell child falls to `Cl=0.7235`, which is `0.175` below the NeuralFoil reference and `0.097` below its parent. It fails both the reference gate and the refinement gate. **Do not use 160/320.**
+The 60/120 and 80/160 pairs miss `delta_cl=0.05`. The 160/320 pair is worse: at 600 iterations the 204,800-cell child is `Cl=0.7235`, which is `0.175` below the NeuralFoil reference and `0.097` below its parent. Continued to 1200 iterations it reached `Cl=0.769` and still missed `delta_cl` 0.05. It fails both the reference gate and the refinement gate. **Do not use 160/320.** Do not raise the parent stream to 120 or `n_normal` to 320.
 
 The selected pair is `100 coarse → 60 refined` (64,000 → 76,800 cells; 100 → 120 chord). It is the only measured family that keeps both members inside the reference band and inside the force-delta bound. The refinement is a 20% chord increase, so the design claim is a local mesh sensitivity, not asymptotic mesh independence. Say that in the README/DESIGN; do not overclaim.
 
@@ -1251,7 +1253,7 @@ Update the planner fake tests to expect the first parent mesh `(100, 8)`, the fi
 - Rename `test_thin_red...` to `test_physics_red...`; expect `gate == "physics"` and `reason` containing `NeuralFoil reference`, `measured Cl 0.8825`, `reference Cl 0.8989`, and `Re 666667`. Replace the old `thin_cl`/`Reynolds number 1000` assertions.
 - Update the fixture `outer` key from `"thin"` to `"physics"`.
 - The design-grade test must still pass with the measured fixture values. Do not weaken it.
-- The child physics red test must now expect the physics reference, not thin airfoil. Its child measurement is `Cl=0.8560`, so assert `measured Cl 0.8560` and `Reynolds number 666667`, not the old `0.8900`/`1000`.
+- The child physics red test must expect the physics reference, not thin airfoil. The shipped child measurement is `Cl=0.855949564`, printed as `measured Cl 0.8559`. Assert that printed value and `Reynolds number 666667`. Do not assert `Cl=0.8560`, and do not restore the old `0.8900`/`1000`.
 
 ### 10.4 `tests/test_parsers.py`
 
@@ -1277,7 +1279,7 @@ Replace all `thin_airfoil` gate strings in `tests/test_desk.py`, `tests/test_stu
 
 ## 11. Fixtures to regenerate
 
-The existing `fixtures/naca2412-a6/` is synthetic (`Cl=0.86`, `Cd=0.02`, 9,600/19,200 cells). It must reflect the new model.
+The fixtures have been regenerated. They are no longer the old synthetic pair (`Cl=0.86`, `Cd=0.02`, 9,600/19,200 cells). The shipped design pair is parent Cl `0.882458973` / Cd `0.0284136587` at 64,000 cells and child Cl `0.855949564` / Cd `0.0280312507` at 76,800 cells. Do not write the synthetic pair back.
 
 ### 11.1 Cell counts and mesh fields
 
@@ -1285,11 +1287,11 @@ Use the **parent** `stream=100`, `grading=8`, `n_normal=160`; **child** `stream=
 
 | File group | Cells | `cells_expected` | `max_non_ortho` | `max_skew` | `n_normal` | `wall_grading` | `first_cell_m` |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| `ledger_green/mesh.json`; `ledger_design/parent/mesh.json`; `ledger_wide/parent/mesh.json` | 64,000 | 64,000 | 63.50 | 1.44 | 160 | 1000 | 0.000340444 |
-| `ledger_design/child/mesh.json`; `ledger_wide/child/mesh.json` | 76,800 | 76,800 | 62.41 | 1.77 | 160 | 1000 | 0.000340444 |
-| `ledger_mesh_red/mesh.json` | 64,000 | 64,000 | 80.0 | 1.44 | 160 | 1000 | 0.000340444 |
+| `ledger_green/mesh.json`; `ledger_design/parent/mesh.json`; `ledger_wide/parent/mesh.json` | 64,000 | 64,000 | 63.49854 | 1.4422178 | 160 | 1000 | 0.000340444 |
+| `ledger_design/child/mesh.json`; `ledger_wide/child/mesh.json` | 76,800 | 76,800 | 63.507934 | 1.7345999 | 160 | 1000 | 0.000340444 |
+| `ledger_mesh_red/mesh.json` | 64,000 | 64,000 | 80.0 | 1.4422178 | 160 | 1000 | 0.000340444 |
 
-The numbers are the actual `checkMesh` values for the two meshes: parent `Max skewness = 1.4422178`, `Max non-orthogonality = 63.49854`; child `Max skewness = 1.7707086`, `Max non-orthogonality = 62.40716`. The red mesh deliberately uses `80.0`. Do not make the red mesh green.
+The numbers stored in the fixtures are the production-writer `checkMesh` values: parent `Max skewness = 1.4422178`, `Max non-orthogonality = 63.49854`; child `Max skewness = 1.7345999`, `Max non-orthogonality = 63.507934`. An earlier probe child (`1.7707086` / `62.40716`) is not the fixture. The red mesh deliberately uses `80.0`. Do not make the red mesh green.
 
 `fixtures/naca2412-a6/mesh_plan.json`:
 
@@ -1331,11 +1333,11 @@ Use the actual final local residual from the final 600-step run if it differs; t
 Use the actual final `forceCoeffs` values from the 600-step production pair. Do not copy the old synthetic values. The measured pair is:
 
 ```text
-parent: Cl = 0.882459, Cd = 0.028414
-child:  Cl = 0.856,    Cd = 0.0280
+parent: Cl = 0.882458973, Cd = 0.0284136587
+child:  Cl = 0.855949564, Cd = 0.0280312507
 ```
 
-Record the exact child values from `postProcessing/forceCoeffs/0/coefficient.dat`; the probe value is shown for the acceptance test. The design fixture must satisfy:
+These are the values in `ledger_design`. Do not round the child back to `0.856`. The design fixture must satisfy:
 
 ```text
 abs(child_cl - parent_cl) <= 0.05

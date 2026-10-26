@@ -2,4 +2,4 @@
 command = "/Users/saarthakbhatia/Documents/vertical-labs/.venv/bin/python"
 args = ["-m", "wingline.mcp_server"]
 tool_timeout_sec = 120
-tool_timeouts = { observe = 10, commit_spec = 30, commit_mesh = 120, commit_solve = 600, commit_forces = 60 }
+tool_timeouts = { observe = 10, commit_spec = 30, commit_mesh = 120, commit_solve = 2100, commit_forces = 60 }

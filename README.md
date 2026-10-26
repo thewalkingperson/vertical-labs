@@ -38,7 +38,7 @@ solving: simpleFoam.
 screening: Cl=0.8825 Cd=0.0284. This mesh is not a design answer until the refinement gate passes.
 ```
 
-Read that from the top. The cylinder health check passed, the mesh passed, and the solver passed. The measured lift is about 0.8825. NeuralFoil's polar for this section at 6 degrees and Re 666667 is about 0.8989, and the allowed gap is about 0.135. That parent is inside the band. A second run at stream 60 on the refined density, 76800 cells, measured Cl 0.8559 and Cd 0.02803. The lift changed by 0.0265, inside the 0.05 force-delta bound. That pair is a 20% chordwise refinement, from 100 chord cells to 120, not a claim of mesh independence.
+Read that from the top. The cylinder health check passed, the mesh passed, and the solver passed. The measured lift is about 0.8825. NeuralFoil's polar for this section at 6 degrees and Re 666667 is about 0.8989. The allowed gap is `max(0.03, 0.05 × |Cl_ref|)`, about 0.045 here, and the reference confidence must be at least 0.90. That parent is inside the band, by about 0.016. A second run at stream 60 on the refined density, 76800 cells, measured Cl 0.8559 and Cd 0.02803. That child is also inside the lift band, by about 0.043. The lift changed by 0.0265 between the two meshes, inside the 0.05 force-delta bound. That pair is a 20% chordwise refinement, from 100 chord cells to 120. It is a local mesh check, not mesh independence.
 
 Each line is a panel:
 
@@ -49,7 +49,7 @@ Each line is a panel:
 | `mesh accepted` | checkMesh passed, with the cell count and the log to open |
 | `solving` | `simpleFoam` ran |
 | `screening` | every physics check passed; this mesh is still not a design |
-| `design` | a finer rerun stayed inside the force-delta bound |
+| `design` | the same wing on a 20% chordwise refinement stayed inside the force-delta bound |
 | `refused` | the named gate failed, and the log to open |
 
 A screening, when the physics checks pass and the review agrees, includes this sentence:
@@ -97,7 +97,9 @@ NeuralFoil 0.3.3 is the external lift reference. It is a learned airfoil model, 
 
 A 204800-cell mesh at the same 600 iterations measured Cl 0.724. Continued to 1200 iterations it reached Cl 0.769. That pair misses the force-delta bound and is not the production mesh.
 
-That is a screening setup. The design sentence says it is not a release for flight hardware.
+On the production pair, y+ stayed above 1, from about 1 to about 13. The wall function is valid through that log layer. The physics gate does not require y+ below 1.
+
+That is a screening setup. Design grade is force agreement on the 20% chordwise pair. It is not mesh independence, and it is not a release for flight hardware.
 
 ## Set up
 
@@ -135,7 +137,7 @@ WINGLINE_STORE=/tmp/wingline-runs \
   .venv/bin/python -m wingline "NACA 2412 at 6 degrees. Is this worth a finer run?"
 ```
 
-Run one question at a time. A second command against the same store raises, because `Engineer.open` holds `runs/engineer.lock` until the process exits. The first cylinder run can pause while OpenFOAM compiles a small library. Later questions reuse a green cylinder result. On this Mac the coarse solve itself finished in a couple of seconds. The solve budget allows up to 540 seconds, so leave the command running.
+Run one question at a time. A second command against the same store raises, because `Engineer.open` holds `runs/engineer.lock` until the process exits. The first cylinder run can pause while OpenFOAM compiles a small library. Later questions reuse a green cylinder result. A production solve runs 600 iterations of wall-modeled Spalart–Allmaras and can take many minutes on this Mac. The solver process is allowed 1800 seconds. The headless tool allowance for `commit_solve` is 2100 seconds, so the receipt can still be written if the process hits that cap. Leave the command running.
 
 Replay the saved fixture. This does not start OpenFOAM or Grok, and it prints a screening:
 
@@ -182,13 +184,17 @@ decision = hardware_decision(graded.outcome)
 
 A local page for the same store. The message box stays open. If a study is idle, Send starts it. If meta is waiting, Send answers the question. If a run is open, Send steers the agent: the text is written onto that run and the next tool turn sees it. `stop` ends the tool loop before the next OpenFOAM command. `grading 12` or `stream 80` during meshing, and `relax 0.5` or `non-ortho 1` during solving, are applied when they are in the allowed set.
 
-The run list is every `run-*` directory. Click a run, then a file, to read the spec, the mesh and solver logs, the force file, or a dictionary. The chips above the text are the parsed cells, mesh check, continuity, Cl, Cd, and dimensions.
+The run list is every `run-*` directory. The wing you asked for stays first. Click a run, then a file, to read the spec, the mesh and solver logs, the force file, or a dictionary. The chips above the text are the parsed cells, mesh check, continuity, Cl, Cd, and dimensions.
+
+The side panel draws that case. The section stays level. The angle is the freestream, drawn as a wind arrow. Pressure and speed are the two fields, and the force history sits under the mesh. This picture is not ParaView. Open in paraFoam opens the asked case there, and a finished direct case opens it once on its own. Run the finer mesh is shown only when the screening says that finer run is worth it.
+
+Constant exploration, in the header, is on by default. When it is on, the page solves the asked wing, then up to 10 nearby sections with the tool client. Those neighbors are stored and listed on the comparison board. They do not add chat lines. The command line still searches four neighbors. The switch is saved in `runs/explore.json`, and a saved switch is kept across a restart. When that file is absent, `WINGLINE_EXPLORE=0` starts the page with the switch off.
 
 ```bash
 .venv/bin/python -m wingline.web
 ```
 
-Open http://127.0.0.1:8765. The page binds to this machine only. `WINGLINE_STORE` chooses the folder, and `WINGLINE_WEB_PORT` chooses the port. One workbench holds the store lock, so close a command-line `python -m wingline` session before starting it. Starting the page clears the chat and the `run-*` case files in that store. The cylinder health cache is kept. Reset, beside Send, clears the transcript without stopping a study that is already running. An open question stays on screen so you can still answer it.
+Open http://127.0.0.1:8765. The page binds to this machine only. `WINGLINE_STORE` chooses the folder, and `WINGLINE_WEB_PORT` chooses the port. One workbench holds the store lock, so close a command-line `python -m wingline` session before starting it. Starting the page clears the chat and the `run-*` case files in that store. The cylinder health cache and the exploration switch are kept. Reset, beside Send, clears the transcript without stopping a study that is already running. An open question stays on screen so you can still answer it.
 
 The tests do not start a new solve:
 
@@ -206,8 +212,15 @@ The tests do not start a new solve:
 | `wingline/mcp_server.py` | the five tools, plus the cylinder health check |
 | `wingline/case_writer.py` | the only process that starts OpenFOAM |
 | `wingline/kernel.py` | bounds, the legal receipt order, judges, and the projection |
+| `wingline/reference.py` | the NeuralFoil polar. It does not import the rest of Wingline |
 | `wingline/outer.py` | the checker |
-| `wingline/meta.py` | one between-run fix |
+| `wingline/meta.py` | the interview and one between-run fix |
+| `wingline/prompts.py` | the system prompts for meta, the inner loop, and review |
+| `wingline/web.py` | the local workbench |
+| `wingline/picture.py` | the mesh and force picture. It does not launch ParaView |
+| `wingline/files.py` | read-only views of one run |
+| `wingline/steer.py` | messages sent while a run is open |
+| `wingline/grok_call.py` | one headless Grok call |
 | `harness/gate/Gate.lean` | the emitted proof of the receipt rules |
 | `harness/shapes/receipt.shacl.ttl` | the emitted shape of a legal ledger |
 | `fixtures/naca2412-a6/` | the offline wing used by the tests |
