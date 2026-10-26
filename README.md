@@ -51,6 +51,8 @@ The outer loop reads the ledger after the inner loop stops. It does not read the
 
 The inner loop finishes the wing you named. It may call five tools, in order: look at the open stage, write the spec, mesh, solve, and read the forces. Each gate writes a receipt. The next gate does not start unless the last one passed. The model may change only the allowed mesh and solver knobs. It stays on this wing. It does not grade the run. If it stops with the ledger still open, the run is refused. Meant to be the simplest, lowest cost models used for grunt work. A model like haiku or small local models like gemma 16b or flint models would work for this loop.
 
+More information on Design.md
+
 
 A screening means the coarse case passed. It is not a design. A design grade means the same wing on a mesh with 20% more chordwise cells stayed inside the force bounds. It is not a release for flight hardware. A named gate that fails is a refusal, and no later number repairs it.
 
