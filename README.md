@@ -15,17 +15,8 @@ python3 -m venv .venv
 
 The command line prints one line per gate. The case lands in `runs/run-…/`. Read `log.checkMesh`, `log.simpleFoam`, and `postProcessing/forceCoeffs/0/coefficient.dat`.
 
-```bash
-WINGLINE_EXPLORE=0 .venv/bin/python -m wingline "NACA 2412 at 6 degrees."
-WINGLINE_AGENT=0   .venv/bin/python -m wingline "NACA 2412 at 6 degrees."
-WINGLINE_FIXTURE=1 .venv/bin/python -m wingline "NACA 2412 at 6 degrees."
-```
 
-Leave `WINGLINE_AGENT` unset and Grok drives the case. `WINGLINE_AGENT=0` selects the planner, for tests and for neighbor search. A failed agent is refused. `WINGLINE_EXPLORE=0` skips the nearby sections. The command line otherwise tries four. `WINGLINE_FIXTURE=1` replays the saved case and does not start OpenFOAM.
-
-The seats call `grok -m grok-4.7`. `grok models` lists what that command can run: `grok-4.7`, `grok-4.7-build-fast`, `grok-4.6`, and `grok-4.5`. To swap, change the `-m` value in three files: `wingline/grok_call.py` for meta and the closing note, `wingline/engineer.py` for the inner loop, and `wingline/outer.py` for review. The prompts and the gates stay the same. A model that `grok models` does not list is not a flag on this harness.
-
-The page uses the same store:
+Run it with:
 
 ```bash
 .venv/bin/python -m wingline.web
