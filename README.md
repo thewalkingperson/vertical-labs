@@ -35,21 +35,20 @@ Angle is −2 to 10 degrees. Speed is 5 to 25 m/s, and 10 is the default. Thickn
 
 ## The three loops
 
-A request moves through three loops. Meta settles the ask. The inner loop runs that one wing. The outer loop grades the ledger. The model's own sentences are saved and are not the evidence.
+A request moves through three loops. Meta agent is meant to be the main agent you interact with and describe your reasoning. The inner loop runs that one wing that the meta agent provides. The outer loop acts as a verifier before passing out results. This allows not only for concurrence in development, but also allows for seperation of tasks for verification and preventing hallucinations. It also allows for different tiers of intelligence to be used for different sections later on to reduce costs.
 
 ### Meta
 
-Meta speaks before a case exists. If the section or the angle is missing, it asks in its own words. It may recommend one NACA 4-digit section. It does not choose the angle. A full sentence such as `NACA 2412 at 6 degrees` skips the interview and goes straight to the inner loop.
-
-### Inner
-
-The inner loop finishes the wing you named. It may call five tools, in order: look at the open stage, write the spec, mesh, solve, and read the forces. Each gate writes a receipt. The next gate does not start unless the last one passed. The model may change only the allowed mesh and solver knobs. It stays on this wing. It does not grade the run. If it stops with the ledger still open, the run is refused.
-
-OpenFOAM starts only from the case writer. The cylinder tutorial runs first, as a health check. The wing is a wall-modeled Spalart–Allmaras `simpleFoam` case.
+Meta speaks before a case exists. If the section or the angle is missing, it asks in its own words. It may recommend one NACA 4-digit section. It does not choose the angle. A full sentence such as `NACA 2412 at 6 degrees` goes straight to the inner loop. This is meant to be the main agent the user interacts with, handling edge cases and managing multiple designs. Longer term, this can be expanded to provide more reasoning and agentic tools to allow for it to be more autonomous in its actions, basically orchestrating all other work. Would also require high end intelligence
 
 ### Outer
 
-The outer loop reads the ledger after the inner loop stops. It does not read the model's transcript. It checks the receipt shape, re-runs the same judges, and compares the measured lift with NeuralFoil. `kernel.project` is the only function that can call a result a screening or a design grade.
+The outer loop reads the ledger after the inner loop stops. It does not read the model's transcript. It checks the receipt shape, re-runs the same judges, and compares the measured lift with NeuralFoil. `kernel.project` is the only function that can call a result a screening or a design grade. This would require the most tuning for intelligence, depending on the work and amount of self improvement being done this may require high end reasoning but should be functional with mid tier intelliegence like Sonnet
+
+### Inner
+
+The inner loop finishes the wing you named. It may call five tools, in order: look at the open stage, write the spec, mesh, solve, and read the forces. Each gate writes a receipt. The next gate does not start unless the last one passed. The model may change only the allowed mesh and solver knobs. It stays on this wing. It does not grade the run. If it stops with the ledger still open, the run is refused. Meant to be the simplest, lowest cost models used for grunt work. A model like haiku or small local models like gemma 16b or flint models would work for this loop.
+
 
 A screening means the coarse case passed. It is not a design. A design grade means the same wing on a mesh with 20% more chordwise cells stayed inside the force bounds. It is not a release for flight hardware. A named gate that fails is a refusal, and no later number repairs it.
 
