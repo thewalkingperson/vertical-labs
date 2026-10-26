@@ -16,7 +16,7 @@ A design grade is force agreement on this wall-modeled Spalart–Allmaras setup.
 
 **Meta** speaks before a case exists. If the section or the angle is missing, it asks. It may recommend one NACA 4-digit section. It does not choose the angle, start OpenFOAM, or grade a wing. A full sentence such as `NACA 2412 at 6 degrees` skips it.
 
-**Inner** runs that wing through five tools, in order: look at the open stage, write the spec, mesh, solve, read the forces. Each step writes a receipt. The next step starts only if the last one passed. The knobs are stream, grading, velocity relaxation, and non-orthogonal correctors. The cylinder tutorial runs first, and a red cylinder stops the wing. Grok drives this unless `WINGLINE_AGENT=0`, which selects the planner. A failed agent is refused. An open ledger at the end is a refusal.
+**Inner** runs that wing through five tools, in order: look at the open stage, write the spec, mesh, solve, read the forces. Each step writes a receipt. The next step starts only if the last one passed. The knobs are stream, grading, velocity relaxation, and non-orthogonal correctors. The cylinder tutorial runs first, and a red cylinder stops the wing.
 
 **Outer** reads the ledger, not the transcript. The first failure wins: the policy files match, the receipt shape holds, the gate proof checks, every receipt is judged again, then lift is checked against NeuralFoil. That check is free transition, confidence at least 0.90, and the band `max(0.03, 0.05 × |Cl_ref|)`. Drag must be positive. Absolute drag is not compared with NeuralFoil. A review may affirm or challenge. It cannot pass the run. A challenge withholds the finer mesh. `kernel.project` is the only function that can call a result a screening or a design grade.
 
