@@ -353,11 +353,20 @@ def test_parafoam_opens_one_window_for_a_case(tmp_path: Path, monkeypatch) -> No
     assert "paraFoam -vtk -touch -case " in str(cmd[2])
     assert str(case.resolve()) in str(cmd[2])
     assert "paraview --script=" in str(cmd[2])
+    assert "--test-script=" in str(cmd[2])
     script = (case / "paraView.py").read_text()
     assert "OpenFOAMReader" in script
     assert "patch/walls" in script
     assert "internalMesh" in script
+    assert "AnimationTime" in script
     assert str((case / "case.foam").resolve()) in script
+    events = (case / "paraView.xml").read_text()
+    assert "runScriptButton" in events
+    assert "filesSelected" in events
+    assert str((case / "paraView.py").resolve()) in events
+    boot = (case / "paraViewBoot.py").read_text()
+    assert "SetActiveConnection" in boot
+    assert "paraview.simple" not in boot
 
     run = tmp_path / "run-design"
     (run / "case" / "system").mkdir(parents=True)

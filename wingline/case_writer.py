@@ -1156,6 +1156,10 @@ walls.UpdatePipeline(last)
 flow.UpdatePipeline(last)
 
 view = GetActiveViewOrCreate("RenderView")
+scene = GetAnimationScene()
+scene.UpdateAnimationUsingDataTimeSteps()
+scene.AnimationTime = last
+GetTimeKeeper().Time = last
 view.ViewTime = last
 view.Background = [0.08, 0.09, 0.11]
 view.UseColorPaletteForBackground = 0
@@ -1211,6 +1215,48 @@ Render()
 """
 
 
+def _xml_attr(value: str) -> str:
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _para_boot() -> str:
+    """Attach Python to the window's session before the shell imports paraview.simple.
+
+    Importing paraview.simple with no active connection opens a second session.
+    The wing then draws off-screen and the window stays empty.
+    """
+    return """import paraview
+paraview.fromGUI = True
+from paraview.modules.vtkRemotingCore import vtkProcessModule
+from paraview import servermanager
+
+pm = vtkProcessModule.GetProcessModule()
+it = pm.NewSessionIterator()
+it.InitTraversal()
+chosen = None
+if not it.IsDoneWithTraversal():
+    chosen = it.GetCurrentSession()
+if chosen is not None:
+    servermanager.SetActiveConnection(servermanager.GetConnectionFromSession(chosen))
+"""
+
+
+def _para_events(script: Path) -> str:
+    """Run the view script in the window's Python shell. --script does not."""
+    path = _xml_attr(str(script))
+    return f"""<?xml version="1.0" ?>
+<pqevents>
+  <pqevent object="pqClientMainWindow/pythonShellDock/pythonShell/runScriptButton" command="activate" arguments="" />
+  <pqevent object="pqClientMainWindow/pythonShellDock/pythonShell/PythonShellRunScriptDialog" command="filesSelected" arguments="{path}" />
+</pqevents>
+"""
+
+
 def open_parafoam(case: Path) -> subprocess.Popen:
     """Open this case in paraFoam and leave the window up. Fixed launcher, no shell=True."""
     case = Path(case).resolve()
@@ -1220,15 +1266,22 @@ def open_parafoam(case: Path) -> subprocess.Popen:
         raise RuntimeError("paraFoam's launcher is not on PATH")
     foam = case / (case.name + ".foam")
     script = case / "paraView.py"
+    boot = case / "paraViewBoot.py"
+    events = case / "paraView.xml"
     script.write_text(_para_view(foam))
+    boot.write_text(_para_boot())
+    events.write_text(_para_events(script.resolve()))
     # ParaView 6 rejects --script together with --data, and paraFoam adds --data
-    # unless -touch is used. -touch writes the .foam file; the script then opens it.
+    # unless -touch is used. -touch writes the .foam file. --script only selects
+    # the window's session; the events run the view in the shell that owns the window.
     snippet = (
         "export LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8; "
         "paraFoam -vtk -touch -case "
         + _shell_quote(case)
         + " && paraview --script="
-        + _shell_quote(script)
+        + _shell_quote(boot)
+        + " --test-script="
+        + _shell_quote(events)
     )
     log_path = case / "log.paraFoam"
     log = log_path.open("ab")
