@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,10 +11,53 @@ import tempfile
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[1]
+_MODEL_DEFAULT = "grok-4.7"
 
 
 def grok_available() -> bool:
     return shutil.which("grok") is not None
+
+
+def model_name() -> str:
+    """The id passed to grok -m. WINGLINE_MODEL overrides the default."""
+    load_local_env()
+    name = os.environ.get("WINGLINE_MODEL", "").strip()
+    return name or _MODEL_DEFAULT
+
+
+def load_local_env(target: dict | None = None, path: Path | None = None) -> None:
+    """Fill blank variables from the repo .env. A variable already set wins."""
+    dest = os.environ if target is None else target
+    for key, value in _dotenv_pairs(path).items():
+        if not dest.get(key):
+            dest[key] = value
+
+
+def _dotenv_pairs(path: Path | None = None) -> dict[str, str]:
+    file = _REPO / ".env" if path is None else path
+    if not file.is_file():
+        return {}
+    pairs: dict[str, str] = {}
+    for raw in file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key[0].isdigit() or not key.replace("_", "").isalnum():
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        # A blank example line must not become an empty bearer.
+        if value == "":
+            continue
+        pairs[key] = value
+    return pairs
 
 
 def run_grok(
@@ -46,7 +90,7 @@ def run_grok(
         "--cwd",
         str(work),
         "-m",
-        "grok-4.7",
+        model_name(),
         "--reasoning-effort",
         "xhigh",
         "--max-turns",
@@ -70,6 +114,9 @@ def run_grok(
                 "run_terminal_command,write,search_replace,spawn_subagent,web_search,web_fetch,read_file,grep",
             ]
         )
+    load_local_env()
+    if env is not None:
+        load_local_env(env)
     try:
         completed = subprocess.run(
             cmd,

@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from wingline.grok_call import load_local_env, model_name
 from wingline.kernel import (
     Bounds,
     Panel,
@@ -301,7 +302,7 @@ def _review(run_dir: Path, receipts: list[dict]) -> str:
                 "--system-prompt-override",
                 REVIEW_SYSTEM,
                 "-m",
-                "grok-4.7",
+                model_name(),
                 "--reasoning-effort",
                 "xhigh",
                 "--max-turns",
@@ -317,6 +318,7 @@ def _review(run_dir: Path, receipts: list[dict]) -> str:
                 "--disallowed-tools",
                 "run_terminal_command,write,search_replace,spawn_subagent,web_search,web_fetch,read_file,grep",
             ]
+            load_local_env()
             proc = subprocess.run(
                 cmd,
                 cwd=scratch,

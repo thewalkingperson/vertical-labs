@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from wingline import engineer, outer
+from wingline import engineer, grok_call, outer
 from wingline.engineer import Engineer, _MCP_ALLOW
 from wingline.kernel import Refusal, load_ledger
 
@@ -38,6 +38,8 @@ def test_agent_command_allows_the_five_mcp_tools(
         seen.append(list(cmd))
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
+    monkeypatch.delenv("WINGLINE_MODEL", raising=False)
+    monkeypatch.setattr(grok_call, "_dotenv_pairs", lambda path=None: {})
     monkeypatch.setattr(engineer.subprocess, "run", fake_run)
     engineer._drive_agent(run, "run-one", "lease", SPEC, tmp_path)
 
@@ -46,6 +48,7 @@ def test_agent_command_allows_the_five_mcp_tools(
     allowed = [cmd[index + 1] for index, value in enumerate(cmd[:-1]) if value == "--allow"]
     assert set(allowed) == set(_MCP_ALLOW)
     assert cmd[cmd.index("--max-turns") + 1] == "12"
+    assert cmd[cmd.index("-m") + 1] == "grok-4.7"
     assert "wingline__observe" in (run / "prompt.txt").read_text()
     assert (run / "agent.log").is_file()
 

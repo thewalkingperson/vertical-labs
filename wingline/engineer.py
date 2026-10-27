@@ -24,6 +24,7 @@ from wingline.kernel import (
     shape,
 )
 from wingline.mcp_server import canonical_spec, perform_pilot, spec_hash
+from wingline.grok_call import load_local_env, model_name
 from wingline.prompts import INNER_SYSTEM
 from wingline.outer import evaluate
 from wingline.planner import drive
@@ -647,7 +648,7 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
         "--cwd",
         str(_REPO),
         "-m",
-        "grok-4.7",
+        model_name(),
         "--reasoning-effort",
         "xhigh",
         "--max-turns",
@@ -683,6 +684,7 @@ def _drive_agent(run_dir: Path, run_id: str, lease: str, spec: dict, store: Path
             "run_terminal_command,write,search_replace,spawn_subagent,web_search,web_fetch,read_file,grep",
         ]
     )
+    load_local_env()
     env = os.environ.copy()
     env["WINGLINE_RUN_ID"] = run_id
     env["WINGLINE_LEASE"] = lease
