@@ -1,5 +1,24 @@
+# Wingline
+
+One question: is this NACA 4-digit wing worth a finer airflow simulation?
+
+The model may run the case and turn a few knobs. It may not decide the result. A result is the receipt ledger. The model's sentences are saved and are not evidence.
+
+| Result | Meaning |
+|---|---|
+| Screening | The coarse case passed. A finer mesh may be worth it. It is not a design. |
+| Design grade | The same wing, with 20% more chordwise cells, stayed within 0.05 in lift and 0.01 in drag. |
+| Refused | A named gate failed. No later number repairs it. |
+
+A design grade is force agreement on this wall-modeled Spalart–Allmaras setup. It is not mesh independence, and it is not a flight release. `hardware_decision` accepts only a design grade.
+
+## What you can do
+
+You ask in a sentence. If the section or the angle is missing, the model asks. A red gate does not print a lift number. paraFoam opens the case. The finer mesh runs only after the screening says so. A closing sentence may suggest another section. That sentence is advice and is not a gate.
 
 ## Three loops
+
+A request moves in this order. Meta settles the ask. The inner loop runs that wing. The outer loop grades the ledger.
 
 **Meta** speaks before a case exists. If the section or the angle is missing, it asks. It may recommend one NACA 4-digit section. It does not choose the angle, start OpenFOAM, or grade a wing. A full sentence such as `NACA 2412 at 6 degrees` skips it.
 
@@ -7,15 +26,15 @@
 
 **Outer** reads the ledger, not the transcript. The first failure wins: the policy files match, the receipt shape holds, the gate proof checks, every receipt is judged again, then lift is checked against NeuralFoil. That check is free transition, confidence at least 0.90, and the band `max(0.03, 0.05 × |Cl_ref|)`. Drag must be positive. Absolute drag is not compared with NeuralFoil. A review may affirm or challenge. It cannot pass the run. A challenge withholds the finer mesh. `kernel.project` is the only function that can call a result a screening or a design grade.
 
-The finer mesh is a new case of the same wing, with 20% more cells along the chord. It runs only when the screening says so. A design grade also needs that child to pass, the force change inside the bounds above, and the child's review to affirm.
-
-On the page, a closing note may name another NACA 4-digit section or an angle inside the bounds. That sentence is not a gate.
+The finer mesh is a new case of the same wing, with 20% more cells along the chord. It runs only when the screening says so. A design grade also needs that child to pass, the force change within 0.05 in lift and 0.01 in drag, and the child's review to affirm.
 
 ## The chain
 
 ```text
 pilot → scope → mesh → solve → forces
 ```
+
+Pilot is the OpenFOAM cylinder tutorial. A red cylinder stops the wing. Scope is the wing inside the bounds. A red scope does not mesh.
 
 Status comes from the judge, never from the model. A red or stopped step has no successor, so a failed mesh cannot grow a lift number. Mesh may be tried three times, and each try must be a different mesh. Solve may be tried twice. A fatal error, a timeout, or forces that are still moving closes the solve. Still moving means the last 100 iterations differ from the previous 100 by more than 1e-4 in lift or in drag. The run is 1,500 iterations.
 
